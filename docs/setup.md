@@ -99,3 +99,13 @@ Run the target project's relevant tests and inspect its actual behavior. A succe
 - **Stale integration lock:** confirm no integration is active before manually removing `.swarm/integration.lock`. Locks are not silently discarded after crashes.
 
 For upgrades, review the new release and compare its installed files with your local copies. The installer is intentionally not a force-update mechanism: an upgrade that changes an existing file requires a separately reviewed replacement.
+
+## Public download
+
+Anyone can clone the toolkit without a GitHub account or invitation:
+
+```sh
+git clone https://github.com/Btabor11/project-swarm.git
+```
+
+The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own authenticated Claude Code installation.

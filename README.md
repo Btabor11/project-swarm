@@ -10,7 +10,7 @@ It is designed for a human or coding agent acting as the coordinator. The coordi
 
 You need **Node.js 20.3+**, macOS/Linux/WSL, and an installed, authenticated **Claude Code CLI** that supports the required restricted-mode flags. The compatibility check tells you if your CLI is suitable. Native Windows process cleanup is not supported.
 
-Clone this private repository using an account with access:
+Clone the public repository. No GitHub account or access invitation is required:
 
 ```sh
 git clone https://github.com/Btabor11/project-swarm.git
@@ -139,4 +139,4 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 
 Only the Claude adapter is implemented. Support for a different provider requires an adapter, tests, and a real scoped exchange; changing `agent` in a JSON file does not add provider support.
 
-The repository is private. People need repository access to clone it, or you can give them an archive. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no Forge website assets, customer data, credentials, or private agent transcripts.
+The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `Btabor11` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own Claude Code authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no Forge website assets, customer data, credentials, or private agent transcripts.
