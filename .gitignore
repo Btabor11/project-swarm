@@ -1,0 +1,7 @@
+.swarm/
+node_modules/
+artifacts/
+.env
+.env.*
+.DS_Store
+*.tgz
