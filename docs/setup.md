@@ -110,4 +110,4 @@ git clone https://github.com/Btabor11/project-swarm.git
 
 The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own provider setup.
 
-`doctor all` lists all four adapters without making network requests. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 16 when you deliberately want more simultaneous workers.
+`doctor all` lists all six adapters without making network requests. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 32 when you deliberately want more simultaneous workers.

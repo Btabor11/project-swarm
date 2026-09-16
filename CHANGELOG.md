@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+- Add restricted Hermes and Qwen Code CLI adapters with copied text and validated complete-file JSON output. Reject tool activity, malformed/duplicate results, and unsuccessful exits.
+- Increase opt-in concurrency to 32 and queue capacity to 256; default concurrency remains 2.
+- Clean owned process groups after normal exits, errors, cancellation, and timeouts, including inherited-open streams. Surface signal permission failures instead of claiming successful cleanup. Escaped groups remain outside scope.
+- Show job status in inspection and block incomplete jobs, with explicit whole-run conflict recovery guidance.
+- Persist the actual serialized Hermes/Qwen prompt and schema for review.
+- Record queue/start/finish times, durations, observed peak activity, per-provider numeric usage, and concise `monitor` snapshots.
+- Add active orchestration guidance, bounded CLI smoke recipes, parser/compatibility tests, and installed runtime support.
+- CLI compatibility and authenticated live verification remain separate. New adapters are mock-process tested; live account access is not claimed.
+
+
 ## 1.1.0
 
 - Add OpenAI Responses, Gemini generateContent, and local/explicit HTTPS Ollama adapters without npm dependencies.

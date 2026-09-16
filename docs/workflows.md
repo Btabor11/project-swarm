@@ -6,9 +6,17 @@ The coordinator owns the outcome. Workers receive small assignments with enough 
 
 After installation, a practical instruction is:
 
-> Read `skills/project-swarm/SKILL.md`. Use this project's swarm runner to review the checkout flow and improve its accessibility. Create bounded assignments with explicit file ownership. Review every response, integrate the useful changes, and run the relevant checks. Do not contact existing terminals or unrelated agents.
+> Read `skills/project-swarm/SKILL.md`. Use this project's swarm runner to improve checkout accessibility. Choose independent tasks, create and validate the manifests, and actually launch the workers. Monitor them until completion, inspect every response and proposed change, reject unsupported findings, integrate acceptable outputs, and run the project's relevant tests and browser checks. Use up to four concurrent workers if there are four useful independent tasks; keep one writer per output file. Handle routine follow-up work autonomously. Do not contact existing terminals or unrelated agents. Report which models actually answered and what you verified.
 
 For a first use, ask for a read-only review before authorizing implementation. The coordinator should show which provider and model actually answered, what it accepted or rejected, and which tests it ran.
+
+## Get useful parallel work
+
+Start from the outcome and split the work by independent questions or file ownership. A strong set might contain an implementation worker for a component, a separate test-file writer, an accessibility reviewer, and a pricing-integrity reviewer. Give each the relevant interfaces and acceptance criteria. Reviewers may share read context; writing jobs must own different outputs.
+
+Use the smallest context that is sufficient, not the entire repository. Ask for exact source evidence and require workers to distinguish demonstrated defects from hypotheses. Source-only UI reviewers cannot judge rendered pixels; reserve browser checks and visual judgment for the coordinator.
+
+The default concurrency is two. Version 1.2 permits up to 32 simultaneous jobs and 256 total jobs per manifest, but a larger number does not create more independent work or guarantee faster results. The Forge case demonstrated six real Claude workers at once. Start with two to four meaningful tasks, then increase only when your workload, machine, account limits, and review capacity justify it.
 
 ## Parallel independent reviews
 
@@ -43,6 +51,8 @@ All workers receive snapshots taken before execution begins. Job B cannot consum
 5. Run application tests and inspect the user-facing result.
 6. Write a new bounded assignment for any remaining issue.
 
+While a run is active, use `node tools/swarm.mjs monitor <run-id>` for progress and `status <run-id>` for its saved details. Use `inspect <run-id>` to review proposed-output status and current conflicts. Inspection includes each output's `jobStatus`; files from unfinished jobs are `blocked`. A file marked `ready` is only a file-level result: another job failure or conflict can still block integration of the entire run.
+
 There is no persistent inter-agent conversation. For a follow-up, copy a reviewed, sanitized summary into an ordinary project file, then explicitly include it as context in the next manifest. Paths inside `.swarm/` are reserved and cannot be used directly as manifest context.
 
 If one output is unacceptable, do not integrate the run simply to obtain another output. Start a corrected run, or make a separately reviewed manual change. The standard integration command operates on the complete run; it does not offer selective job integration.
@@ -76,6 +86,8 @@ Report these facts to the user:
 - Remaining limits, including any setup or checks that did not succeed.
 
 Avoid claiming that the swarm deployed, tested, browsed, or communicated with other agents when those capabilities were not available to its workers.
+
+For example, Forge's six-worker run produced a browser-test file and five focused reviews. The coordinator integrated the reviewed outputs, ran the browser checks, and made evidence-based accessibility and motion fixes. The accurate report distinguishes “the worker wrote tests” from “the coordinator executed them.” See the [case study](forge-case-study.md) for the actual assignments and limits of the concurrency evidence.
 
 ## Included task recipes
 

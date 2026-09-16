@@ -2,7 +2,7 @@
 
 **Give one coordinator a mission. Let scoped workers handle independent pieces. Review and integrate the results.**
 
-Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code workers and tool-free OpenAI, Gemini, and Ollama API jobs inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
+Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code, Hermes, and Qwen Code workers plus tool-free OpenAI, Gemini, and Ollama API jobs inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
 
 It is designed for a human or coding agent acting as the coordinator. The coordinator decides the tasks, supplies context, reviews findings, integrates changes, and verifies the final product.
 
@@ -87,7 +87,7 @@ flowchart LR
 ```
 
 - Each worker gets explicitly listed files and declared output ownership.
-- Concurrency defaults to 2 and accepts an explicit 1–16, shared across CLI processes and API requests. They do not attach to existing terminal sessions.
+- Concurrency defaults to 2 and accepts an explicit 1–32, shared across CLI processes and API requests. They do not attach to existing terminal sessions.
 - Claude reading jobs have Read/Glob/Grep; writing jobs also have Write/Edit. API jobs receive only copied UTF-8 text and return validated file contents; they have no tools. Shell, agent, browser integration, and MCP tools are disabled by the adapter.
 - Integration imports only declared files, rejects missing output/deletions, checks content and permission conflicts, and preserves existing executable bits.
 - Prompts, responses, provider logs, resolved model identifiers, usage, and reported cost remain in the local run directory.
@@ -113,14 +113,15 @@ Copied workspaces and guarded integration are **not an operating-system security
 }
 ```
 
-Replace paths with files that exist in your project. An empty `outputs` array makes a reading-only job. Only Claude jobs may omit `model` to preserve the installed CLI default; API jobs require an explicit model. Model aliases resolve through your provider and may change; run records capture the actual model identifier when returned.
+Replace paths with files that exist in your project. An empty `outputs` array makes a reading-only job. CLI jobs may omit `model` to preserve the installed CLI default; API jobs require an explicit model. Model aliases resolve through your provider and may change; run records capture the actual model identifier when returned.
 
 ## Commands
 
-- `doctor [claude|openai|gemini|ollama|all]` — check compatibility or environment configuration; no model call. Omitted provider means Claude.
+- `doctor [claude|hermes|qwen|openai|gemini|ollama|all]` — check compatibility or environment configuration; no model call. Omitted provider means Claude.
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call.
 - `run <manifest>` — start workers and save the exchange.
 - `status <run-id>` — read progress, errors, and model metadata.
+- `monitor <run-id>` — concise snapshot of queued/running/completed jobs, observed peak concurrency, timings, and numeric usage.
 - `inspect <run-id>` — inspect proposed outputs and conflicts without importing.
 - `integrate <run-id>` — import reviewed, declared outputs from a successful run.
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
@@ -128,6 +129,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 
 ## Learn, modify, and share
 
+- [Active orchestration and monitoring](docs/orchestration.md)
 - [Providers, authentication, and API smoke tests](docs/providers.md)
 - [Setup and troubleshooting](docs/setup.md)
 - [Workflow recipes and coordinator prompts](docs/workflows.md)
@@ -138,8 +140,8 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - [Security and limitations](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
-Four adapters are implemented: `claude`, `openai` (Responses API), `gemini` (generateContent), and `ollama` (chat API). API workers are single-request text/file generators, not interactive coding CLIs. Their contract is tested with mock HTTP responses; this release does not claim live API account/model verification. Claude has a recorded live project-scoped history. See [provider setup](docs/providers.md) for honest capability limits and smoke verification.
+Six adapters are implemented: `claude`, `hermes` (Nous Research CLI), `qwen` (Qwen Code CLI), `openai` (Responses API), `gemini` (generateContent), and `ollama` (chat API). API workers are single-request text/file generators, not interactive coding CLIs. Their contract is tested with mock HTTP responses; this release does not claim live API account/model verification. Claude has a recorded live project-scoped history. See [provider setup](docs/providers.md) for honest capability limits and smoke verification.
 
-Use the included recipes for code review, UI source review, documentation, test planning, four-worker Claude reviews, and mixed-provider reviews. API workers do not see rendered screenshots or run tests. The coordinator performs those checks. Raising concurrency is opt-in and increases simultaneous resource use; it is not a spending cap.
+Use the included recipes for code review, UI source review, documentation, test planning, four-worker Claude reviews, and mixed-provider reviews. API workers do not see rendered screenshots or run tests. The coordinator performs those checks. Hermes and Qwen use serialized copied context and strict JSON file envelopes; they do not get file-editing tools through this adapter. Their compatibility and authentication must be checked independently. Raising concurrency is opt-in and increases simultaneous resource use; it is not a spending cap.
 
 The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `Btabor11` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own provider authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no Forge website assets, customer data, credentials, or private agent transcripts.

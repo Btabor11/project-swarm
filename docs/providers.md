@@ -1,8 +1,12 @@
 # Providers and setup
 
-Project Swarm 1.1 supports four adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm 1.2 supports six adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
+
+- **Hermes (`hermes`)** is the Nous Research Hermes Agent CLI. It receives copied text through stdin under safe mode, ignored user configuration/rules, an explicit `none` toolset, and one turn.
+- **Qwen (`qwen`)** is Qwen Code (the best match for the requested “Quin”). It receives copied text through stdin under safe mode, default approval, a zero tool-call budget, and one turn. It never uses the synthetic JSON-schema tool exemption.
+
 
 - **Claude (`claude`)** starts a fresh restricted CLI process with copied files and scoped file tools. Authentication belongs to the installed Claude Code CLI. The repository's Forge case study records real Claude exchanges.
 - **OpenAI (`openai`)** makes one Responses API request with strict structured output and no tools. It reads `OPENAI_API_KEY` from the coordinator environment; a ChatGPT or Codex login is not automatically an API credential.
@@ -46,7 +50,7 @@ The three API adapters have deterministic mocked-transport tests covering their 
 
 All API jobs must name `model`. `maxOutputTokens` defaults to 8,192 and accepts 256–32,768; choose a smaller value for simple tasks. Provider reasoning may consume output allowance. Incomplete, refused, malformed, oversized, or wrongly scoped output fails the job; partial files are not accepted. There are no automatic retries.
 
-Concurrency defaults to 2 and can be explicitly set from 1 to 16 across providers. More concurrent jobs can increase resource load and simultaneous charges. Tokens and timeouts are not dollar budgets. Cancellation aborts the local HTTP request and response reading, but remote work or charges may already have occurred. API cost is recorded as unavailable, not calculated from assumed prices.
+Concurrency defaults to 2 and can be explicitly set from 1 to 32 across providers. More concurrent jobs can increase resource load and simultaneous charges. Tokens and timeouts are not dollar budgets. Cancellation aborts the local HTTP request and response reading, but remote work or charges may already have occurred. API cost is recorded as unavailable, not calculated from assumed prices.
 
 HTTP failures record a status and omit the response body. Transport and response-stream exceptions are sanitized; request headers and raw API responses are not logged. Read-only summaries and generated files can still contain supplied source. Keep `.swarm/` private. For authentication errors, check the selected provider's account/environment setup outside the runner; for schema errors, verify the chosen model's structured-output capability. Do not weaken file validation as a workaround.
 
@@ -68,3 +72,27 @@ Implementation references, reviewed for this release:
 - [Claude CLI reference](https://code.claude.com/docs/en/cli-reference): fixed restricted CLI flags and structured result events.
 
 Provider behavior, models, and account access can change. Keep compatibility checks and real smoke verification separate from mock unit tests.
+
+## Hermes and Qwen Code installation and compatibility
+
+Use the upstream installation steps for [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation/) or [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/). Qwen's official npm package is `@qwen-code/qwen-code`; install it with your preferred project-local package setup and expose its `qwen` binary on PATH for the coordinator. Hermes requires its own upstream Python environment and `hermes` entrypoint. This toolkit does not modify global shell profiles, install gateways, or authenticate accounts automatically.
+
+```sh
+node tools/swarm.mjs doctor hermes
+node tools/swarm.mjs doctor qwen
+node tools/swarm.mjs validate examples/hermes-smoke.json
+node tools/swarm.mjs run examples/hermes-smoke.json
+# Qwen equivalent: examples/qwen-smoke.json
+```
+
+The doctor checks executable version/help and all required flags, failing closed when restrictions are missing. It does not prove authentication or execute a model. Authenticate separately through each CLI's normal setup. New CLI adapters have deterministic subprocess contract tests; neither authenticated Hermes nor Qwen inference is claimed as live-verified in this release.
+
+Hermes uses `chat --safe-mode --ignore-user-config --ignore-rules --toolsets none --query-file - --oneshot --format stream-json --max-turns 1`. The explicit `none` selection relies on the upstream resolver's empty result for an unrecognized named toolset; **an empty string is not equivalent**, because it enables default toolsets. Safe mode disables plugins/hooks/MCP and rule injection. The runner strips inherited dispatcher/task variables that could re-enable another task's lifecycle tools. This behavior is source-reviewed, not an OS sandbox guarantee; incompatible upstream changes require updating the adapter.
+
+Qwen uses safe mode, default approval, `--max-tool-calls 0`, and one session turn. The upstream setting defines zero as aborting before the first tool call. No `--json-schema` is passed, because its synthetic completion tool is exempt from the tool-call budget. Safe mode ignores `--core-tools`, so this adapter never mistakes an empty core-tools value for a deny-all policy. Task data is serialized on stdin and the fixed prompt is not a slash command. Both adapters require exactly one successful terminal JSONL record, reject tool events, validate every output path/content, and let only the coordinator import files.
+
+These CLIs may read their authentication stores. Hermes may retain its own host session logs; Qwen is launched with chat recording, telemetry, and OpenAI debug logging disabled although each invocation is fresh and never resumed. Review upstream retention settings; `.swarm/` is not necessarily the only copy of CLI transcript data. Their host process environment is not an OS isolation boundary.
+
+Primary restriction references: [Hermes CLI flags and result events](https://hermes-agent.nousresearch.com/docs/reference/cli-commands), [Hermes tool selection source](https://github.com/NousResearch/hermes-agent/blob/main/model_tools.py), [Qwen headless mode](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/), and [Qwen tool-budget schema](https://github.com/QwenLM/qwen-code/blob/main/packages/vscode-ide-companion/schemas/settings.schema.json).
+
+Local compatibility evidence: official npm Qwen Code 0.24.0 was installed into an ignored verification directory and its real version/help output confirmed the required flags, including the explicit zero-tool-call semantics. This did not authenticate or send an inference request. Hermes was not installed in the verification environment; its adapter remains source-reviewed and mock-process tested until an operator passes doctor and a bounded live exchange.

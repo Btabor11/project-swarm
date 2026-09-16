@@ -55,8 +55,31 @@ The overall website redesign included three visual refinement passes and applica
 
 For a transferable version of the review pattern, adapt `examples/parallel-review.json` to your project's actual files.
 
-## Four-worker concurrency verification
+## From connection checks to application work
 
-For the 1.1 expansion, the coordinator ran four fresh Claude CLI workers concurrently with short, independent communication tasks. All four completed successfully in approximately 3.8 seconds, with distinct sessions. This was a bounded connectivity/concurrency check, not a benchmark of larger coding jobs or proof that sixteen workers suit every machine/account. Provider metadata was retained locally; model aliases and usage attribution were not flattened into an unsupported single-model claim.
+For the 1.1 expansion, four fresh Claude acknowledgment workers ran concurrently and all completed. That established a bounded connection and concurrency check, not the quality of a larger coding assignment.
 
-The four-worker live check complements deterministic tests that track simultaneous fresh processes and prove that cancellation closes active workers without starting queued work. The new OpenAI, Gemini, and Ollama adapters have separate mock HTTP contract tests; the Claude check does not establish their live availability.
+The runner then handled substantive website work. A topping-interface worker proposed changes to `commerce.js` and `commerce.css` in its copied workspace; the coordinator inspected and integrated those files. A subsequent four-worker ingredient geometry, rendering, and test-planning review completed. The coordinator checked the evidence and rejected unsupported claims instead of accepting every report.
+
+Next, six fresh Claude workers ran simultaneously with `sonnet` requested in each assignment:
+
+- `topping-browser-tests` wrote `tests/toppings.test.mjs`.
+- `topping-accessibility` reviewed topping controls and announcements.
+- `builder-price-integrity` reviewed selection and pricing behavior.
+- `story-motion-review` reviewed scroll-story motion handling.
+- `renderer-lifecycle` reviewed rendering resource behavior.
+- `skill-user-workflow` reviewed the orchestration experience.
+
+The coordinator observed all six in the running state together. All completed, and their declared reports and test file were inspected and integrated. The test-writing worker produced code; the coordinator ran the browser checks and performed visual inspection.
+
+Actionable findings led to accessible price descriptions and topping-cap announcements, a reduced-motion inline-style reset, and clearer package inspection: `jobStatus` is exposed and an output from an unfinished job is marked `blocked`. Documentation was also clarified so a seemingly ready file is not mistaken for permission to integrate a run that has another conflict.
+
+An independent package review found descendant-process cleanup and exact CLI prompt-logging issues. Both were fixed; the package's 48 tests passed at that review checkpoint. This is a historical result, not a substitute for running the current release's suite.
+
+## What the scaling evidence establishes
+
+Version 1.2 accepts up to 32 concurrent workers and 256 jobs per manifest, with concurrency defaulting to two. Six simultaneous real Claude workers were demonstrated; 32 simultaneous authenticated workers were not. A deterministic eight-worker queue test exercises scheduling with fake workers and must not be presented as eight live provider sessions.
+
+The release has six adapters: Claude, Hermes, Qwen, OpenAI, Gemini, and Ollama. The Claude runs above do not establish another adapter's live availability. Hermes and Qwen authenticated inference were not verified in this work; Qwen CLI 0.24.0 help and doctor compatibility were checked only. The HTTP adapters have separate mock contract tests. Choose adapters according to their documented verification level and perform your own small authenticated smoke exchange before relying on them.
+
+A second six-worker review ran through the 1.2 runtime while the coordinator refined ingredient geometry. Its monitor recorded `peakConcurrency: 6`, and all six jobs completed. Their findings prompted local-frame texture-normal correction, fallback icon corrections, and further worker-cleanup regressions. The final package suite reached 53 passing tests before publication.

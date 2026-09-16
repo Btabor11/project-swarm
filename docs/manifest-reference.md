@@ -25,16 +25,16 @@ Replace the example paths with files in your target project.
 ## Top-level fields
 
 - `version`: required, exactly `1`.
-- `jobs`: required array of 1–50 jobs.
-- `concurrency`: optional integer from 1 to 16; default is 2. The effective parallelism is never greater than the number of jobs.
+- `jobs`: required array of 1–256 jobs.
+- `concurrency`: optional integer from 1 to 32; default is 2. The effective parallelism is never greater than the number of jobs.
 
 Unknown top-level fields are rejected.
 
 ## Job fields
 
 - `id`: required unique string, 1–80 characters. The first character is an ASCII letter or digit; remaining characters may also include `_` and `-`.
-- `agent`: required: `"claude"`, `"openai"`, `"gemini"`, or `"ollama"`.
-- `model`: model identifier or alias. Optional only for Claude; required for API jobs. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Syntax validation does not prove provider availability.
+- `agent`: required: `"claude"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, or `"ollama"`.
+- `model`: model identifier or alias. Optional for CLI jobs; required for API jobs. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Syntax validation does not prove provider availability.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
 - `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for the worker to read.
 - `outputs`: required array of explicit relative file paths, at most 100 entries. Existing files are copied automatically; new files may be created. An empty array creates a read-only job.
@@ -63,6 +63,7 @@ node tools/swarm.mjs doctor openai
 node tools/swarm.mjs validate examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
 node tools/swarm.mjs status <run-id>
+node tools/swarm.mjs monitor <run-id>
 node tools/swarm.mjs inspect <run-id>
 node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs cancel <run-id>
@@ -70,7 +71,7 @@ node tools/swarm.mjs cancel <run-id>
 
 Use `--root /path/to/project` to select a project explicitly. Otherwise the runner uses its own installed project root. Manifests are loaded from the selected root.
 
-`validate` checks the assignment, paths, and copied-file size limits without creating a run or invoking a model. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports proposed-output sizes, statuses, and current conflicts without editing files. Neither inspection nor validation approves content or runs application tests.
+`validate` checks the assignment, paths, and copied-file size limits without creating a run or invoking a model. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
 
 After installing into a project, use `coordination/swarm-smoke.json` and `coordination/swarm-parallel-review.json` in place of the standalone checkout's `examples/` paths. `--root` may appear before or after the command.
 
@@ -103,3 +104,5 @@ Integration requires a complete run from the same project, a matching saved mani
 An integration lock serializes integrations through this runner. Individual file replacements are atomic, with best-effort rollback on a caught write failure. This is not a transactional filesystem or protection against an unrelated process editing files concurrently. Keep a single coordinator for project writes and use normal version control.
 
 API jobs additionally require a complete, non-refused response and valid JSON with exactly `summary` and `files`. Each file contains only `path` and complete `content`; every declared output must occur exactly once. Responses are capped at 16 MiB, redirects are refused, and partial/truncated output is never integrated. Provider credentials/endpoints cannot appear as manifest configuration. See [provider setup](providers.md).
+
+The `monitor` command is a single read-only snapshot, suitable for periodic coordinator polling. New runs record `queuedAt`, `startedAt`, `finishedAt`, `durationMs`, configured concurrency, and observed peak active jobs. Counts reflect recorded queue state, not proof that stale processes survived a coordinator crash. Numeric usage is grouped by provider without combining incompatible token fields or estimating missing costs. Older run records remain readable; unavailable historical timings remain null.

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "qwen-smoke",
+      "agent": "qwen",
+      "prompt": "Return one sentence acknowledging this bounded communication test, and write the same sentence into the declared output. Use no tools.",
+      "context": [],
+      "outputs": [
+        "coordination/qwen-handshake.md"
+      ],
+      "timeoutMs": 120000
+    }
+  ]
+}

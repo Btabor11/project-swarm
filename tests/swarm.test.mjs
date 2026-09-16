@@ -42,7 +42,7 @@ test('rejects traversal, absolute paths, secrets, collisions, and executable ada
   assert.throws(() => validateManifest(manifest([job(), job({ id: 'second' })])), /collision/);
   assert.throws(() => validateManifest(manifest([job({ command: '/tmp/evil' })])), /Unknown/);
   assert.throws(() => validateManifest(manifest([job({ agent: 'codex' })])), /Unsupported/);
-  assert.throws(() => validateManifest({ ...manifest(), concurrency: 17 }), /Concurrency/);
+  assert.throws(() => validateManifest({ ...manifest(), concurrency: 33 }), /Concurrency/);
 });
 
 test('refuses symlink context and launches no workers', async t => {
@@ -217,4 +217,66 @@ test('cancelling four live CLI processes closes them and never launches queued w
  for(let i=0;i<100&&launched<4;i++)await new Promise(resolve=>setTimeout(resolve,10));
  assert.equal(launched,4);await cancelRun(root,'stop-four');const state=await pending;
  assert.equal(state.status,'cancelled');assert.equal(active,0);assert.equal(launched,4);assert.ok(state.jobs.every(entry=>entry.status==='cancelled'));
+});
+
+test('timeout kills an owned descendant even after its direct parent exits and closes stdio', async t => {
+ if(process.platform==='win32')return;
+ const root=await fixture(t);let descendant;
+ t.after(()=>{if(descendant)try{process.kill(descendant,'SIGKILL');}catch{}});
+ const provider=fake(`import {spawn} from 'node:child_process';const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000);"],{stdio:['ignore','pipe','ignore']});child.stdout.once('data',()=>{fs.writeFileSync('descendant.pid',String(child.pid));child.stdout.destroy();});setInterval(()=>{},1000);`);
+ const state=await runManifest(root,manifest([job({timeoutMs:250})]),{spawnImpl:provider});
+ descendant=Number(await fs.readFile(path.join(root,'.swarm/workspaces',state.id,'writer/descendant.pid'),'utf8'));
+ assert.equal(state.jobs[0].status,'timeout');
+ // On Linux an orphan may briefly be a zombie; it must no longer execute.
+ const {execFileSync}=await import('node:child_process');let status='';for(let i=0;i<30;i++){try{status=execFileSync('ps',['-o','stat=','-p',String(descendant)],{encoding:'utf8'}).trim();}catch{status='';}if(!status||status.startsWith('Z'))break;await new Promise(resolve=>setTimeout(resolve,10));}
+ assert.ok(!status||status.startsWith('Z'),`descendant still active: ${status}`);
+});
+
+test('inspect blocks partial outputs from timed-out and cancelled jobs while integration remains forbidden', async t => {
+ const {inspectRun}=await import('../tools/swarm.mjs');const root=await fixture(t);
+ const partial=fake(`fs.writeFileSync('input.txt','partial edit');setInterval(()=>{},1000);`);
+ const timed=await runManifest(root,manifest([job({timeoutMs:250})]),{spawnImpl:partial});
+ const timedReport=await inspectRun(root,timed.id);assert.equal(timedReport.files[0].jobStatus,'timeout');assert.equal(timedReport.files[0].status,'blocked');assert.equal(timedReport.files[0].bytes,12);await assert.rejects(integrateRun(root,timed.id),/Only a complete/);
+ const pending=runManifest(root,manifest(),{id:'partial-cancel',spawnImpl:partial});
+ for(let i=0;i<100;i++){let text;try{text=await fs.readFile(path.join(root,'.swarm/workspaces/partial-cancel/writer/input.txt'),'utf8');}catch{}if(text==='partial edit')break;await new Promise(resolve=>setTimeout(resolve,10));}
+ await cancelRun(root,'partial-cancel');const cancelled=await pending;const report=await inspectRun(root,cancelled.id);assert.equal(report.files[0].jobStatus,'cancelled');assert.equal(report.files[0].status,'blocked');assert.equal(report.files[0].bytes,12);await assert.rejects(integrateRun(root,cancelled.id),/Only a complete/);assert.equal(await fs.readFile(path.join(root,'input.txt'),'utf8'),'original');
+});
+
+test('normal success and error exits clean surviving descendants in the owned group', async t => {
+ if(process.platform==='win32')return;
+ const root=await fixture(t),descendants=[];
+ t.after(()=>{for(const pid of descendants)try{process.kill(pid,'SIGKILL');}catch{}});
+ for(const success of [true,false]){
+  const provider=fake(`import {spawn} from 'node:child_process';const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000);"],{stdio:['ignore','pipe','ignore']});child.stdout.once('data',()=>{fs.writeFileSync('descendant.pid',String(child.pid));child.stdout.destroy();${success?done:''}process.exit(${success?0:7});});`);
+  const state=await runManifest(root,manifest(),{spawnImpl:provider});const pid=Number(await fs.readFile(path.join(root,'.swarm/workspaces',state.id,'writer/descendant.pid'),'utf8'));descendants.push(pid);assert.equal(state.status,success?'complete':'failed');assert.equal(state.jobs[0].cleanupError,null);
+  const {execFileSync}=await import('node:child_process');let status='';for(let i=0;i<30;i++){try{status=execFileSync('ps',['-o','stat=','-p',String(pid)],{encoding:'utf8'}).trim();}catch{status='';}if(!status||status.startsWith('Z'))break;await new Promise(resolve=>setTimeout(resolve,10));}assert.ok(!status||status.startsWith('Z'),`descendant still active: ${status}`);
+ }
+});
+
+test('cleanup signal permission failures are explicit and prevent successful integration', async t => {
+ const root=await fixture(t);const attempts=[];
+ const state=await runManifest(root,manifest(),{spawnImpl:update,killImpl:(target,signal)=>{attempts.push({target,signal});throw Object.assign(Error('private detail must not leak'),{code:'EPERM'});}});
+ assert.equal(state.status,'failed');assert.equal(state.jobs[0].status,'failed');assert.match(state.jobs[0].cleanupError,/EPERM/);assert.match(state.jobs[0].error,/cleanup failed/);assert.ok(!JSON.stringify(state).includes('private detail'));assert.equal(attempts.length,1);assert.equal(attempts[0].signal,'SIGTERM');assert.ok(attempts[0].target<0);await assert.rejects(integrateRun(root,state.id),/Only a complete/);
+});
+
+test('SIGKILL escalation failures are reported instead of swallowed', async()=>{
+ const {EventEmitter}=await import('node:events');const {stopChild}=await import('../tools/swarm.mjs');const child=new EventEmitter();child.pid=424242;const attempts=[];
+ const result=await stopChild(child,{killImpl:(target,signal)=>{attempts.push({target,signal});if(signal==='SIGKILL')throw Object.assign(Error('denied'),{code:'EPERM'});}});
+ assert.match(result.error,/EPERM.*SIGKILL/);assert.ok(attempts.every(call=>call.target===-424242));
+});
+
+test('cancellation cleanup denial preserves its reason, fails the run, and does not start queued jobs', async t => {
+ const root=await fixture(t),controller=new AbortController();let child,launched=0;
+ t.after(()=>{if(child?.pid)try{process.kill(process.platform==='win32'?child.pid:-child.pid,'SIGKILL');}catch{}});
+ const provider=fake('setInterval(()=>{},1000)');
+ const state=await runManifest(root,{...manifest([job(),job({id:'queued',outputs:[]})]),concurrency:1},{signal:controller.signal,spawnImpl:(...args)=>{launched++;child=provider(...args);setTimeout(()=>controller.abort(),40);return child;},killImpl:()=>{throw Object.assign(Error('denied'),{code:'EPERM'});}});
+ assert.equal(state.status,'failed');assert.equal(state.jobs[0].status,'failed');assert.equal(state.jobs[0].terminationReason,'cancelled');assert.match(state.jobs[0].cleanupError,/EPERM/);assert.equal(state.jobs[1].status,'cancelled');assert.equal(launched,1);await assert.rejects(integrateRun(root,state.id));
+});
+
+test('normal leader exit cleans a descendant that keeps inherited stdout open without timing out',async t=>{
+ if(process.platform==='win32')return;
+ const root=await fixture(t);let descendant;t.after(()=>{if(descendant)try{process.kill(descendant,'SIGKILL');}catch{}});
+ const script=`import {spawn} from 'node:child_process';const child=spawn(process.execPath,['-e',"const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync('ready.pid',String(process.pid));setInterval(()=>{},1000);"],{stdio:['ignore','inherit','ignore']});const poll=setInterval(()=>{if(fs.existsSync('ready.pid')){clearInterval(poll);${done}process.exit(0);}},10);`;
+ const state=await runManifest(root,manifest([job({timeoutMs:2000})]),{spawnImpl:fake(script)});descendant=Number(await fs.readFile(path.join(root,'.swarm/workspaces',state.id,'writer/ready.pid'),'utf8'));
+ assert.equal(state.status,'complete');assert.equal(state.jobs[0].terminationReason,null);assert.equal(state.jobs[0].cleanupError,null);assert.ok(state.jobs[0].durationMs<1800);
 });
