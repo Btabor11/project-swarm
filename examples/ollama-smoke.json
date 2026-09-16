@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ollama-smoke",
+      "agent": "ollama",
+      "model": "qwen3:8b",
+      "prompt": "Write one sentence acknowledging this bounded communication test. Do not claim to run tests.",
+      "context": [],
+      "outputs": [
+        "coordination/ollama-handshake.md"
+      ],
+      "maxOutputTokens": 1024,
+      "timeoutMs": 120000
+    }
+  ]
+}

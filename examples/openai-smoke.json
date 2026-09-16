@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "openai-smoke",
+      "agent": "openai",
+      "model": "gpt-4.1-mini",
+      "prompt": "Write one sentence acknowledging this bounded communication test. Do not claim to run tests.",
+      "context": [],
+      "outputs": [
+        "coordination/openai-handshake.md"
+      ],
+      "maxOutputTokens": 1024,
+      "timeoutMs": 120000
+    }
+  ]
+}

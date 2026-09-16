@@ -10,7 +10,7 @@ A fresh Claude Code process first completed a scoped communication check. It was
 
 A later direct CLI assignment gave Claude ownership of the menu, builder controls, cart, location page, and commerce styles. The coordinator retained separate ownership of the hero, shared shell, rendering module, assets, build tooling, and verification. The observed build worker reported `claude-opus-5[1m]`.
 
-That commerce implementation used a directly launched CLI process, not the reusable Project Swarm runner. It demonstrated a useful ownership split and informed the runner's design. A separate Codex tooling subagent helped implement the reusable runner and deterministic tests; that was also distinct from the runner's Claude-only adapter.
+That commerce implementation used a directly launched CLI process, not the reusable Project Swarm runner. It demonstrated a useful ownership split and informed the runner's design. A separate Codex tooling subagent helped implement the reusable runner and deterministic tests; that was also distinct from the runner's then-Claude-only adapter.
 
 One concrete implementation correction was the cart quantity limit. The initial brief suggested 50, but Claude identified the server's actual cap as 20. The implementation and tests followed the server authority.
 
@@ -54,3 +54,9 @@ The useful pattern was a narrow worker task followed by independent coordinator 
 The overall website redesign included three visual refinement passes and application preflight work. Those were coordinator-led project activities; the swarm runner itself does not render websites, measure frame rates, run tests, or certify a finished design.
 
 For a transferable version of the review pattern, adapt `examples/parallel-review.json` to your project's actual files.
+
+## Four-worker concurrency verification
+
+For the 1.1 expansion, the coordinator ran four fresh Claude CLI workers concurrently with short, independent communication tasks. All four completed successfully in approximately 3.8 seconds, with distinct sessions. This was a bounded connectivity/concurrency check, not a benchmark of larger coding jobs or proof that sixteen workers suit every machine/account. Provider metadata was retained locally; model aliases and usage attribution were not flattened into an unsupported single-model claim.
+
+The four-worker live check complements deterministic tests that track simultaneous fresh processes and prove that cancellation closes active workers without starting queued work. The new OpenAI, Gemini, and Ollama adapters have separate mock HTTP contract tests; the Claude check does not establish their live availability.

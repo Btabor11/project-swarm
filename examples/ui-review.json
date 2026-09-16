@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ui-review",
+      "agent": "gemini",
+      "model": "gemini-2.5-flash",
+      "prompt": "Review the onboarding user flow described in the supplied README. Identify friction and accessible wording improvements. You have no screenshot or rendered UI; do not claim visual inspection.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "coordination/ui-review.md"
+      ],
+      "maxOutputTokens": 4096,
+      "timeoutMs": 180000
+    }
+  ]
+}

@@ -17,7 +17,7 @@ async function fixture(t) {
 const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000, ...overrides });
 const manifest = jobs => ({ version: 1, concurrency: 2, jobs: jobs ?? [job()] });
 
-// Only tests inject a provider. The production CLI always spawns the literal claude command.
+// Only tests inject a provider. The production Claude adapter spawns the literal claude command.
 function fake(script) {
   return (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs';\n${script}`], options);
 }
@@ -42,7 +42,7 @@ test('rejects traversal, absolute paths, secrets, collisions, and executable ada
   assert.throws(() => validateManifest(manifest([job(), job({ id: 'second' })])), /collision/);
   assert.throws(() => validateManifest(manifest([job({ command: '/tmp/evil' })])), /Unknown/);
   assert.throws(() => validateManifest(manifest([job({ agent: 'codex' })])), /Unsupported/);
-  assert.throws(() => validateManifest({ ...manifest(), concurrency: 4 }), /Concurrency/);
+  assert.throws(() => validateManifest({ ...manifest(), concurrency: 17 }), /Concurrency/);
 });
 
 test('refuses symlink context and launches no workers', async t => {
@@ -201,4 +201,20 @@ test('records actual model and usage metadata from provider events', async t => 
 test('doctor rejects incompatible CLIs without a model call', async()=>{
  const {doctor}=await import('../tools/swarm.mjs');
  await assert.rejects(doctor({exec:async(_cmd,args)=>({stdout:args[0]==='--version'?'old CLI':'--tools'})}),/lacks required flags/);
+});
+
+test('explicit concurrency four creates four simultaneous fresh processes and drains the queue', async t => {
+ const root=await fixture(t);let active=0,maximum=0,launched=0;
+ const provider=fake(`setTimeout(()=>{${done}},120)`);
+ const state=await runManifest(root,{...manifest(Array.from({length:9},(_,i)=>job({id:`parallel-${i}`,outputs:[]}))),concurrency:4},{spawnImpl:(...args)=>{launched++;active++;maximum=Math.max(maximum,active);const child=provider(...args);child.on('close',()=>active--);return child;}});
+ assert.equal(state.status,'complete');assert.equal(launched,9);assert.equal(maximum,4);assert.equal(active,0);
+});
+
+test('cancelling four live CLI processes closes them and never launches queued workers', async t => {
+ const root=await fixture(t);let active=0,launched=0;
+ const provider=fake('setInterval(()=>{},1000)');
+ const pending=runManifest(root,{...manifest(Array.from({length:8},(_,i)=>job({id:`stop-${i}`,outputs:[]}))),concurrency:4},{id:'stop-four',spawnImpl:(...args)=>{launched++;active++;const child=provider(...args);child.on('close',()=>active--);return child;}});
+ for(let i=0;i<100&&launched<4;i++)await new Promise(resolve=>setTimeout(resolve,10));
+ assert.equal(launched,4);await cancelRun(root,'stop-four');const state=await pending;
+ assert.equal(state.status,'cancelled');assert.equal(active,0);assert.equal(launched,4);assert.ok(state.jobs.every(entry=>entry.status==='cancelled'));
 });

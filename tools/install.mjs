@@ -19,7 +19,8 @@ async function safeTarget(root,relative){
 export async function install(targetDirectory,{source=packageRoot}={}){
  const root=await fs.realpath(targetDirectory);
  if(!(await fs.stat(root)).isDirectory())throw Error('Target must be an existing project directory');
- const pairs=[['tools/swarm.mjs','tools/swarm.mjs'],['tests/swarm.test.mjs','tests/swarm.test.mjs'],['skills/project-swarm/SKILL.md','skills/project-swarm/SKILL.md'],['LICENSE','licenses/project-swarm/LICENSE'],['NOTICE','licenses/project-swarm/NOTICE'],['SECURITY.md','skills/project-swarm/references/SECURITY.md'],['CONTRIBUTING.md','skills/project-swarm/references/CONTRIBUTING.md'],['examples/smoke.json','coordination/swarm-smoke.json'],['examples/parallel-review.json','coordination/swarm-parallel-review.json']];
+ const pairs=[['tools/api-adapters.mjs','tools/api-adapters.mjs'],['tests/adapters.test.mjs','tests/adapters.test.mjs'],['tools/swarm.mjs','tools/swarm.mjs'],['tests/swarm.test.mjs','tests/swarm.test.mjs'],['skills/project-swarm/SKILL.md','skills/project-swarm/SKILL.md'],['LICENSE','licenses/project-swarm/LICENSE'],['NOTICE','licenses/project-swarm/NOTICE'],['SECURITY.md','skills/project-swarm/references/SECURITY.md'],['CONTRIBUTING.md','skills/project-swarm/references/CONTRIBUTING.md'],['examples/smoke.json','coordination/swarm-smoke.json'],['examples/parallel-review.json','coordination/swarm-parallel-review.json']];
+ for(const file of (await fs.readdir(path.join(source,'examples'))).filter(f=>f.endsWith('.json')&&!['smoke.json','parallel-review.json'].includes(f)).sort())pairs.push([`examples/${file}`,`coordination/swarm-${file}`]);
  for(const file of (await fs.readdir(path.join(source,'docs'))).filter(f=>f.endsWith('.md')).sort())pairs.push([`docs/${file}`,`skills/project-swarm/references/${file}`]);
  const plan=[];
  // Validate all destinations before writing the first file.

@@ -1,17 +1,17 @@
 # Setup and first run
 
-Project Swarm runs fresh Claude Code processes for a coordinator. It does not attach to an existing terminal, run a background service, or install a global agent skill.
+Project Swarm runs fresh Claude Code processes or single-request API jobs for a coordinator. It does not attach to an existing terminal, run a background service, or install a global agent skill.
 
 ## Requirements
 
 - Node.js 20.3 or newer.
-- Claude Code installed, authenticated, and available as `claude` on your PATH.
-- A Claude CLI version supporting the adapter's restricted mode, safe mode, explicit tool selection, noninteractive permissions, strict MCP configuration, and streaming JSON output.
+- For Claude jobs only: Claude Code installed, authenticated, and available as `claude` on your PATH.
+- For Claude jobs only: a Claude CLI version supporting the adapter's restricted mode, safe mode, explicit tool selection, noninteractive permissions, strict MCP configuration, and streaming JSON output.
 - A project whose files you are authorized to send to the selected model provider.
 
 The initial real-provider validation was on macOS. Linux is an intended platform; run the tests and a smoke exchange in your environment. Windows is not a supported platform claim for this release.
 
-This package has no runtime npm dependencies. Claude Code is installed and authenticated separately. This project does not provide model access or replace your provider's billing and account setup.
+This package has no runtime npm dependencies. Claude Code is installed and authenticated separately. API adapters need no provider SDK: see [provider setup](providers.md) for environment authentication and local Ollama. This project does not provide model access or replace your provider's billing and account setup.
 
 ## Check the checkout
 
@@ -40,9 +40,9 @@ The installer copies the runner, tests, skill, examples, supporting documentatio
 
 The installed entry points are:
 
-- `tools/swarm.mjs` and `tests/swarm.test.mjs`.
+- `tools/swarm.mjs`, `tools/api-adapters.mjs`, and the runner/adapter tests.
 - `skills/project-swarm/SKILL.md`, with supporting guides in its `references/` directory.
-- `coordination/swarm-smoke.json` and `coordination/swarm-parallel-review.json`.
+- `coordination/swarm-smoke.json`, `coordination/swarm-parallel-review.json`, and all API/workflow example manifests.
 - License material in `licenses/project-swarm/`.
 
 Installation does not configure an editor or globally register the skill. Ask your coding agent to read `skills/project-swarm/SKILL.md` explicitly, or register that file through the skill-discovery mechanism your agent supports. Do not assume all editors discover the same skill locations.
@@ -94,7 +94,7 @@ Run the target project's relevant tests and inspect its actual behavior. A succe
 - **Authentication or unavailable model:** inspect the job's `stderr.log` and `provider.jsonl` locally. Correct the provider setup outside the worker, then start a new run. Do not put credentials in a manifest.
 - **Missing context:** supply an explicit existing file path relative to the selected project root. Directory names and glob patterns are not accepted.
 - **Integration conflict:** preserve the newer project content. Start a fresh task from that content or manually review the proposed changes; the runner intentionally does not force an overwrite.
-- **A worker says it ran tests:** this adapter does not grant shell tools. The coordinator must run the actual tests.
+- **A worker says it ran tests:** none of the shipped adapters grant shell tools. The coordinator must run the actual tests.
 - **Stale `running` status after a machine or runner crash:** inspect the records and processes you own. Status files are historical evidence, not proof that a process is alive. Never kill an unrelated terminal based on a stale PID.
 - **Stale integration lock:** confirm no integration is active before manually removing `.swarm/integration.lock`. Locks are not silently discarded after crashes.
 
@@ -108,4 +108,6 @@ Anyone can clone the toolkit without a GitHub account or invitation:
 git clone https://github.com/Btabor11/project-swarm.git
 ```
 
-The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own authenticated Claude Code installation.
+The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own provider setup.
+
+`doctor all` lists all four adapters without making network requests. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 16 when you deliberately want more simultaneous workers.

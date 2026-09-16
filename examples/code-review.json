@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "code-review",
+      "agent": "openai",
+      "model": "gpt-4.1-mini",
+      "prompt": "Review the supplied README for inconsistent commands or behavior claims. Cite exact text and distinguish concrete defects from suggestions.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "coordination/code-review.md"
+      ],
+      "maxOutputTokens": 4096,
+      "timeoutMs": 180000
+    }
+  ]
+}

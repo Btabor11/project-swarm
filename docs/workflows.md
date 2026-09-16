@@ -49,7 +49,7 @@ If one output is unacceptable, do not integrate the run simply to obtain another
 
 ## Model selection
 
-Set a job's `model` field when you want a specific model or alias. Omitting it leaves model choice to the installed Claude CLI's default. Availability and alias resolution depend on the provider account and CLI.
+Set a job's `model` field when you want a specific model or alias. For Claude only, omitting it leaves model choice to the installed Claude CLI's default. Availability and alias resolution depend on the provider account and CLI.
 
 Use recorded provider metadata to distinguish the requested alias from the model that answered. A label such as `sonnet` is not a guarantee of a permanent model version. Select models based on observed task quality, latency, and account access; this project does not assume a model is cheaper or better without evidence.
 
@@ -61,7 +61,7 @@ Timeout and concurrency settings bound simultaneous work and elapsed runtime. Th
 node tools/swarm.mjs cancel <run-id>
 ```
 
-The cancellation request tells the active runner to stop its own worker process groups. It does not attach to or terminate unrelated agent sessions. You may also interrupt the attached runner.
+The cancellation request tells the active runner to stop its own worker process groups and abort its own HTTP requests. It does not attach to or terminate unrelated agent sessions. You may also interrupt the attached runner.
 
 A failed, timed-out, or cancelled run cannot be integrated through the normal command. Inspect its records, reduce or correct the assignment, and start a fresh run. Never translate a timeout into an assumption that the worker completed its files correctly.
 
@@ -76,3 +76,9 @@ Report these facts to the user:
 - Remaining limits, including any setup or checks that did not succeed.
 
 Avoid claiming that the swarm deployed, tested, browsed, or communicated with other agents when those capabilities were not available to its workers.
+
+## Included task recipes
+
+The examples directory includes `code-review.json`, `ui-review.json`, `documentation.json`, `test-plan.json`, `four-reviewers.json`, and `mixed-provider-review.json`. They use this toolkit README as safe example context. Adapt the file lists, prompts, declared reports, and model names before using them on your application. After installation they are named `coordination/swarm-<example-name>.json`.
+
+Code review asks for defects with source evidence; UI review evaluates supplied source and cannot see rendered pixels; documentation writes a complete declared Markdown output; test planning proposes checks without pretending to execute them. Four-reviewer and mixed-provider recipes explicitly opt into concurrency 4. Jobs are peers with snapshots, not a dependency graph. Use separate runs after integration for dependent stages. See [provider setup](providers.md) to configure only the providers you choose.

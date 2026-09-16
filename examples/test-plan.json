@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "test-plan",
+      "agent": "ollama",
+      "model": "qwen3:8b",
+      "prompt": "Write a verification plan for the README workflow covering failure recovery, output ownership, and credentials. Do not claim tests were executed.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "coordination/test-plan.md"
+      ],
+      "maxOutputTokens": 4096,
+      "timeoutMs": 180000
+    }
+  ]
+}

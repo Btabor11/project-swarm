@@ -11,6 +11,8 @@ test('fresh installation validates its example and repeated installation is idem
  const root=await fixture(t),first=await install(root);assert.ok(first.added.length>=12);
  assert.equal((await install(root)).added.length,0);
  const result=JSON.parse(execFileSync(process.execPath,[path.join(root,'tools/swarm.mjs'),'validate','coordination/swarm-smoke.json'],{encoding:'utf8'}));assert.equal(result.root,await fs.realpath(root));assert.equal(result.status,'valid');
+ const api=JSON.parse(execFileSync(process.execPath,[path.join(root,'tools/swarm.mjs'),'doctor','ollama'],{encoding:'utf8',env:{...process.env,SWARM_OLLAMA_URL:'http://127.0.0.1:11434'}}));assert.equal(api.agent,'ollama');assert.equal(api.liveVerified,false);
+ const apiManifest=JSON.parse(execFileSync(process.execPath,[path.join(root,'tools/swarm.mjs'),'validate','coordination/swarm-openai-smoke.json'],{encoding:'utf8'}));assert.equal(apiManifest.status,'valid');
  for(const file of await fs.readdir(path.join(root,'skills/project-swarm/references'))){const dir=path.join(root,'skills/project-swarm/references'),content=await fs.readFile(path.join(dir,file),'utf8');for(const match of content.matchAll(/\]\(([^)]+)\)/g)){if(!/^[a-z]+:/.test(match[1]))await fs.access(path.resolve(dir,match[1]));}}
 });
 test('installer refuses an existing different file before writing anything',async t=>{

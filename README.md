@@ -2,13 +2,13 @@
 
 **Give one coordinator a mission. Let scoped workers handle independent pieces. Review and integrate the results.**
 
-Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code workers inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
+Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code workers and tool-free OpenAI, Gemini, and Ollama API jobs inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
 
 It is designed for a human or coding agent acting as the coordinator. The coordinator decides the tasks, supplies context, reviews findings, integrates changes, and verifies the final product.
 
 ## Start here
 
-You need **Node.js 20.3+**, macOS/Linux/WSL, and an installed, authenticated **Claude Code CLI** that supports the required restricted-mode flags. The compatibility check tells you if your CLI is suitable. Native Windows process cleanup is not supported.
+You need **Node.js 20.3+**, macOS/Linux/WSL, and one configured provider. For Claude jobs, use an installed, authenticated **Claude Code CLI** supporting the restricted-mode flags. API jobs use environment credentials (or a local Ollama server), with no Claude installation required. Native Windows process cleanup is not supported.
 
 Clone the public repository. No GitHub account or access invitation is required:
 
@@ -17,10 +17,10 @@ git clone https://github.com/Btabor11/project-swarm.git
 cd project-swarm
 npm test
 npm run check
-npm run doctor
+node tools/swarm.mjs doctor all
 ```
 
-There are no npm dependencies to install. Tests use fake local workers and make no model calls. `doctor` checks CLI compatibility; the next step verifies actual authentication and model access:
+There are no npm dependencies to install. Tests use fake local workers and mock HTTP responses; they make no model calls. `doctor all` reports local compatibility/configuration without testing authentication. Start with the Claude smoke below, or choose an API smoke from [provider setup](docs/providers.md):
 
 ```sh
 node tools/swarm.mjs validate examples/smoke.json
@@ -36,7 +36,7 @@ node tools/swarm.mjs inspect <run-id>
 node tools/swarm.mjs integrate <run-id>
 ```
 
-A successful smoke run produces `coordination/swarm-handshake.md` after integration. Each live worker uses your existing Claude access and consumes provider usage. A host environment may require network execution approval.
+A successful smoke run produces `coordination/swarm-handshake.md` after integration. Each live worker uses your own provider access and can consume billable usage. A host environment may require network execution approval.
 
 ## Drop it into another project
 
@@ -87,8 +87,8 @@ flowchart LR
 ```
 
 - Each worker gets explicitly listed files and declared output ownership.
-- Up to three fresh CLI processes can run concurrently. They do not attach to existing terminal sessions.
-- Reading jobs have Read/Glob/Grep; writing jobs also have Write/Edit. Shell, agent, browser integration, and MCP tools are disabled by the adapter.
+- Concurrency defaults to 2 and accepts an explicit 1–16, shared across CLI processes and API requests. They do not attach to existing terminal sessions.
+- Claude reading jobs have Read/Glob/Grep; writing jobs also have Write/Edit. API jobs receive only copied UTF-8 text and return validated file contents; they have no tools. Shell, agent, browser integration, and MCP tools are disabled by the adapter.
 - Integration imports only declared files, rejects missing output/deletions, checks content and permission conflicts, and preserves existing executable bits.
 - Prompts, responses, provider logs, resolved model identifiers, usage, and reported cost remain in the local run directory.
 - The coordinator handles follow-up rounds by explicitly passing earlier responses into a new assignment. Workers do not maintain a shared conversation or coordinate themselves.
@@ -113,11 +113,11 @@ Copied workspaces and guarded integration are **not an operating-system security
 }
 ```
 
-Replace paths with files that exist in your project. An empty `outputs` array makes a reading-only job. Omit `model` to preserve the installed CLI's default. Model aliases resolve through your provider and may change; run records capture the actual model identifier when returned.
+Replace paths with files that exist in your project. An empty `outputs` array makes a reading-only job. Only Claude jobs may omit `model` to preserve the installed CLI default; API jobs require an explicit model. Model aliases resolve through your provider and may change; run records capture the actual model identifier when returned.
 
 ## Commands
 
-- `doctor` — check Node/platform and Claude flag compatibility; no model call.
+- `doctor [claude|openai|gemini|ollama|all]` — check compatibility or environment configuration; no model call. Omitted provider means Claude.
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call.
 - `run <manifest>` — start workers and save the exchange.
 - `status <run-id>` — read progress, errors, and model metadata.
@@ -128,6 +128,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 
 ## Learn, modify, and share
 
+- [Providers, authentication, and API smoke tests](docs/providers.md)
 - [Setup and troubleshooting](docs/setup.md)
 - [Workflow recipes and coordinator prompts](docs/workflows.md)
 - [Manifest and command reference](docs/manifest-reference.md)
@@ -137,6 +138,8 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - [Security and limitations](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
-Only the Claude adapter is implemented. Support for a different provider requires an adapter, tests, and a real scoped exchange; changing `agent` in a JSON file does not add provider support.
+Four adapters are implemented: `claude`, `openai` (Responses API), `gemini` (generateContent), and `ollama` (chat API). API workers are single-request text/file generators, not interactive coding CLIs. Their contract is tested with mock HTTP responses; this release does not claim live API account/model verification. Claude has a recorded live project-scoped history. See [provider setup](docs/providers.md) for honest capability limits and smoke verification.
 
-The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `Btabor11` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own Claude Code authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no Forge website assets, customer data, credentials, or private agent transcripts.
+Use the included recipes for code review, UI source review, documentation, test planning, four-worker Claude reviews, and mixed-provider reviews. API workers do not see rendered screenshots or run tests. The coordinator performs those checks. Raising concurrency is opt-in and increases simultaneous resource use; it is not a spending cap.
+
+The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `Btabor11` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own provider authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no Forge website assets, customer data, credentials, or private agent transcripts.

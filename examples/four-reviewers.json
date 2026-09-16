@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "jobs": [
+    {
+      "id": "setup",
+      "agent": "claude",
+      "prompt": "Review only the setup guidance in README.md. Give concrete evidence and a concise improvement proposal. Do not run tests.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "coordination/setup-review.md"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "scope",
+      "agent": "claude",
+      "prompt": "Review only the scope guidance in README.md. Give concrete evidence and a concise improvement proposal. Do not run tests.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "coordination/scope-review.md"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "workflow",
+      "agent": "claude",
+      "prompt": "Review only the workflow guidance in README.md. Give concrete evidence and a concise improvement proposal. Do not run tests.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "coordination/workflow-review.md"
+      ],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "recovery",
+      "agent": "claude",
+      "prompt": "Review only the recovery guidance in README.md. Give concrete evidence and a concise improvement proposal. Do not run tests.",
+      "context": [
+        "README.md"
+      ],
+      "outputs": [
+        "coordination/recovery-review.md"
+      ],
+      "timeoutMs": 180000
+    }
+  ]
+}
