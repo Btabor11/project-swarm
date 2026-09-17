@@ -1,0 +1,310 @@
+{
+  "note": "Sanitized lifecycle metadata only. Provider-reported costs are estimates, not invoices. Runs have settled; final local product checks are recorded separately from worker completion. No sequential control exists.",
+  "runs": [
+    {
+      "runId": "1789670103678-2870cc78",
+      "status": "complete",
+      "startedAt": "2026-09-17T18:35:03.679Z",
+      "finishedAt": "2026-09-17T18:59:31.353Z",
+      "peakConcurrency": 2,
+      "jobs": [
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T18:35:03.690Z",
+          "startedAt": "2026-09-17T18:35:03.703Z",
+          "finishedAt": "2026-09-17T18:50:53.393Z",
+          "durationMs": 949690,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 5.914395750000001,
+          "progress": null,
+          "job": "cohort-1-job-1",
+          "outputFiles": 4
+        },
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T18:35:03.702Z",
+          "startedAt": "2026-09-17T18:35:03.703Z",
+          "finishedAt": "2026-09-17T18:59:31.352Z",
+          "durationMs": 1467649,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 13.412517999999993,
+          "progress": null,
+          "job": "cohort-1-job-2",
+          "outputFiles": 11
+        }
+      ]
+    },
+    {
+      "runId": "1789670271566-4e3425f2",
+      "status": "complete",
+      "startedAt": "2026-09-17T18:37:51.567Z",
+      "finishedAt": "2026-09-17T19:01:25.191Z",
+      "peakConcurrency": 2,
+      "jobs": [
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T18:37:51.582Z",
+          "startedAt": "2026-09-17T18:37:51.596Z",
+          "finishedAt": "2026-09-17T18:53:40.920Z",
+          "durationMs": 949325,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 5.952353249999999,
+          "progress": null,
+          "job": "cohort-2-job-1",
+          "outputFiles": 5
+        },
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T18:37:51.595Z",
+          "startedAt": "2026-09-17T18:37:51.596Z",
+          "finishedAt": "2026-09-17T19:01:25.188Z",
+          "durationMs": 1413593,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 9.0385935,
+          "progress": null,
+          "job": "cohort-2-job-2",
+          "outputFiles": 7
+        }
+      ]
+    },
+    {
+      "runId": "1789670408496-0068fa69",
+      "status": "complete",
+      "startedAt": "2026-09-17T18:40:08.497Z",
+      "finishedAt": "2026-09-17T18:54:53.671Z",
+      "peakConcurrency": 2,
+      "jobs": [
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T18:40:08.519Z",
+          "startedAt": "2026-09-17T18:40:08.538Z",
+          "finishedAt": "2026-09-17T18:54:53.669Z",
+          "durationMs": 885131,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 5.908009999999999,
+          "progress": null,
+          "job": "cohort-3-job-1",
+          "outputFiles": 3
+        },
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T18:40:08.537Z",
+          "startedAt": "2026-09-17T18:40:08.538Z",
+          "finishedAt": "2026-09-17T18:52:51.636Z",
+          "durationMs": 763098,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 5.428004249999999,
+          "progress": null,
+          "job": "cohort-3-job-2",
+          "outputFiles": 3
+        }
+      ]
+    },
+    {
+      "runId": "1789670613119-a5021559",
+      "status": "complete",
+      "startedAt": "2026-09-17T18:43:33.120Z",
+      "finishedAt": "2026-09-17T18:53:14.268Z",
+      "peakConcurrency": 1,
+      "jobs": [
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T18:43:33.130Z",
+          "startedAt": "2026-09-17T18:43:33.131Z",
+          "finishedAt": "2026-09-17T18:53:14.268Z",
+          "durationMs": 581137,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 2.524867,
+          "progress": null,
+          "job": "cohort-4-job-1",
+          "outputFiles": 2
+        }
+      ]
+    },
+    {
+      "runId": "1789671905306-7d18ee01",
+      "status": "failed",
+      "startedAt": "2026-09-17T19:05:05.307Z",
+      "finishedAt": "2026-09-17T19:25:05.719Z",
+      "peakConcurrency": 3,
+      "integratedAt": null,
+      "jobs": [
+        {
+          "status": "timeout",
+          "queuedAt": "2026-09-17T19:05:05.314Z",
+          "startedAt": "2026-09-17T19:05:05.325Z",
+          "finishedAt": "2026-09-17T19:25:05.643Z",
+          "durationMs": 1200318,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": null,
+          "progress": null,
+          "job": "cohort-5-job-1",
+          "outputFiles": 1
+        },
+        {
+          "status": "timeout",
+          "queuedAt": "2026-09-17T19:05:05.318Z",
+          "startedAt": "2026-09-17T19:05:05.325Z",
+          "finishedAt": "2026-09-17T19:25:05.719Z",
+          "durationMs": 1200394,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": null,
+          "progress": null,
+          "job": "cohort-5-job-2",
+          "outputFiles": 3
+        },
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T19:05:05.324Z",
+          "startedAt": "2026-09-17T19:05:05.325Z",
+          "finishedAt": "2026-09-17T19:19:22.661Z",
+          "durationMs": 857336,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 6.535121999999999,
+          "progress": null,
+          "job": "cohort-5-job-3",
+          "outputFiles": 2
+        }
+      ],
+      "integrationOutcome": "none; failed cohort, including its completed job, was not integrated"
+    },
+    {
+      "runId": "1789674051065-cf58713e",
+      "status": "complete",
+      "startedAt": "2026-09-17T19:40:51.066Z",
+      "finishedAt": "2026-09-17T19:43:55.296Z",
+      "peakConcurrency": 1,
+      "integratedAt": "2026-09-17T19:46:54.713Z",
+      "jobs": [
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T19:40:51.070Z",
+          "startedAt": "2026-09-17T19:40:51.071Z",
+          "finishedAt": "2026-09-17T19:43:55.296Z",
+          "durationMs": 184225,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 0.5030875,
+          "progress": {
+            "observable": true,
+            "stdoutBytes": 105207,
+            "stderrBytes": 0,
+            "firstOutputAt": "2026-09-17T19:40:51.414Z",
+            "lastOutputAt": "2026-09-17T19:43:55.007Z",
+            "lastActivityAt": "2026-09-17T19:43:55.007Z",
+            "sampledAt": "2026-09-17T19:43:55.294Z"
+          },
+          "job": "cohort-6-job-1",
+          "outputFiles": 1
+        }
+      ],
+      "integrationOutcome": "whole successful one-job cohort reviewed and integrated"
+    },
+    {
+      "runId": "1789674101225-7c4e728c",
+      "status": "complete",
+      "startedAt": "2026-09-17T19:41:41.226Z",
+      "finishedAt": "2026-09-17T19:46:32.443Z",
+      "peakConcurrency": 1,
+      "integratedAt": "2026-09-17T19:50:16.124Z",
+      "jobs": [
+        {
+          "status": "complete",
+          "queuedAt": "2026-09-17T19:41:41.229Z",
+          "startedAt": "2026-09-17T19:41:41.230Z",
+          "finishedAt": "2026-09-17T19:46:32.442Z",
+          "durationMs": 291212,
+          "actualModel": "claude-opus-5[1m]",
+          "costUsd": 0.98468625,
+          "progress": {
+            "observable": true,
+            "stdoutBytes": 299875,
+            "stderrBytes": 0,
+            "firstOutputAt": "2026-09-17T19:41:41.534Z",
+            "lastOutputAt": "2026-09-17T19:46:32.175Z",
+            "lastActivityAt": "2026-09-17T19:46:32.175Z",
+            "sampledAt": "2026-09-17T19:46:32.440Z"
+          },
+          "job": "cohort-7-job-1",
+          "outputFiles": 1
+        }
+      ],
+      "integrationOutcome": "whole successful one-job cohort reviewed and integrated"
+    }
+  ],
+  "villageRecovery": {
+    "deliveryMechanisms": {
+      "landscapeAndBuildings": "two independent project-swarm CLI cohorts",
+      "sceneAndUi": "fresh native subagent implementation in explicitly owned files",
+      "compositionAndAcceptance": "coordinator review and integration"
+    },
+    "failedProposalFilesCopied": false,
+    "observation": "Two smaller art deliveries completed after the larger first cohort timed out. Scope, scheduling, and implementation strategy changed; this is not a controlled speed comparison.",
+    "sceneStructure": {
+      "source": "coordinator-executed scene checks",
+      "passedChecks": 8,
+      "meshes": 134,
+      "instances": 1096,
+      "geometryTriangles": 30438,
+      "uniqueGeometries": 36,
+      "uniqueMaterials": 23,
+      "disposalCycles": 2,
+      "measurementType": "CPU scene graph and resource inventory; not rendered GPU performance"
+    },
+    "choreography": {
+      "passedChecks": 15,
+      "coverage": [
+        "large-roster road bounds",
+        "continuous idle and queued paths",
+        "speed-limited state transitions",
+        "zero-step freeze"
+      ]
+    },
+    "browserStatus": "reviewed desktop and narrow mobile; populated and empty live village, inspection and conversation access, camera navigation, motion toggle, corrected photo at128/128samples",
+    "combinedFinalPreflight": "full44-script suite passed before final photo correction; focused14scene tests and combined verification/build passed after correction; local schema check passed",
+    "productionDeployment": false,
+    "photoCorrection": {
+      "observedDefects": [
+        "unsupported instanced geometry",
+        "mixed RGB/RGBA merge lost terrain color"
+      ],
+      "delivery": "bounded native worker plus coordinator browser review",
+      "regressionChecks": 6,
+      "sceneChecksTotal": 14,
+      "actualInstalledLibraryMergeTest": true,
+      "liveResourcesPreserved": true
+    },
+    "previewFixturesRemoved": true,
+    "limits": [
+      "No controlled performance benchmark",
+      "No renderer-loss simulation or OS-level reduced-motion change",
+      "External OAuth app registration and live accounts not configured"
+    ]
+  },
+  "areaManagerReview": {
+    "mechanism": "native area manager with bounded native worker delegation; not a CLI integration record",
+    "observedDefect": "grant creation racing venture archival could leave access restorable",
+    "before": {
+      "connectionSharing": {
+        "passed": 103,
+        "failed": 4
+      },
+      "setup": {
+        "passed": 221,
+        "failed": 4
+      }
+    },
+    "after": {
+      "connectionSharing": {
+        "passed": 107,
+        "failed": 0
+      },
+      "setup": {
+        "passed": 225,
+        "failed": 0
+      }
+    },
+    "evidenceType": "deterministic local PostgreSQL wait-graph regression tests; mocked providers",
+    "fix": "consistently ordered source and recipient venture locks before active-owner and account/key locks",
+    "limits": "Scoped regression evidence, not a measured manager productivity or defect-rate comparison. Full combined product suite subsequently passed; provider calls remained mocked."
+  }
+}

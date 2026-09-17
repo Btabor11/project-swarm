@@ -23,7 +23,7 @@ node tools/swarm.mjs doctor all
 There are no npm dependencies to install. Tests use fake local workers and mock HTTP responses; they make no model calls. `doctor all` reports local compatibility/configuration without testing authentication. Start with the Claude smoke below, or choose an API smoke from [provider setup](docs/providers.md):
 
 ```sh
-node tools/swarm.mjs validate examples/smoke.json
+node tools/swarm.mjs preflight examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
 ```
 
@@ -52,7 +52,7 @@ Add `.swarm/` to the target project's `.gitignore`. Then, in that project:
 
 ```sh
 node tools/swarm.mjs doctor
-node tools/swarm.mjs validate coordination/swarm-smoke.json
+node tools/swarm.mjs preflight coordination/swarm-smoke.json
 node tools/swarm.mjs run coordination/swarm-smoke.json
 ```
 
@@ -71,6 +71,14 @@ After installation, give the coordinator a prompt like:
 > Read `skills/project-swarm/SKILL.md`. Use Project Swarm to improve this feature. Split independent work into focused assignments, give each output one writer, review the workers' responses, integrate appropriate changes, and run the project's checks. Keep all work inside this repository.
 
 The skill is project-local and can be read explicitly. It is not automatically installed into a product's global skill-discovery directory. See [setup](docs/setup.md) for setup and sharing details.
+
+## Ship smaller pieces
+
+Before dispatch, give every job one coherent deliverable, one owner for each output, and an observable acceptance check. Split a job when it crosses unrelated concerns or has distinct checks that can run independently. Agree on shared interfaces first; run dependent implementation in later batches after reviewed integration. More workers help only when they have independent work.
+
+Use `preflight` to expose context size and snapshot hazards. Group jobs into small batches that can be reviewed and integrated together: one slow job otherwise holds every output in its run. Review completed outputs while peers finish, then run focused tests plus the project integration checks. A manager may propose a plan or review one area, but the coordinator still validates and dispatches workers.
+
+The [connector and village study](docs/connector-swarm-study.md) records observed wait time, changes, and limits. It does not claim a measured speedup without a controlled comparison.
 
 ## What happens during a run
 
@@ -119,9 +127,10 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 
 - `doctor [claude|hermes|qwen|openai|gemini|ollama|all]` — check compatibility or environment configuration; no model call. Omitted provider means Claude.
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call.
+- `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange.
 - `status <run-id>` — read progress, errors, and model metadata.
-- `monitor <run-id>` — concise snapshot of queued/running/completed jobs, observed peak concurrency, timings, and numeric usage.
+- `monitor <run-id>` — concise snapshot of queued/running/completed jobs, observed peak concurrency, timings, numeric usage, and content-free CLI output counters. Silence is not proof that a worker is stuck.
 - `inspect <run-id>` — inspect proposed outputs and conflicts without importing.
 - `integrate <run-id>` — import reviewed, declared outputs from a successful run.
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
@@ -130,6 +139,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 ## Learn, modify, and share
 
 - [Active orchestration and monitoring](docs/orchestration.md)
+- [Manager task contracts and staged delivery](docs/managed-feature-plan.md)
 - [Providers, authentication, and API smoke tests](docs/providers.md)
 - [Setup and troubleshooting](docs/setup.md)
 - [Workflow recipes and coordinator prompts](docs/workflows.md)

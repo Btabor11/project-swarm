@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "pass1-live-progress",
+      "agent": "claude",
+      "prompt": "Iteration pass1 of real-world swarm improvement. Read evidence-baseline.json: operators cannot distinguish a silent stuck CLI vs working CLI because only lifecycle state until finish. Implement CONTENT-FREE live activity telemetry, not raw log streaming: per-job stdoutBytes/stderrBytes, firstOutputAt,lastOutputAt, lastActivityAt or compatible progress object, surfaced monitor/summarizeRun. Count UTF8 bytes, preserve no output as null (not zero latency). State must persist periodically while CLI running with bounded/throttled serialized saves, no races that overwrite terminal status; stop timers and no delayed writes after return on success/failure/cancel/timeout. API jobs explicitly telemetry unavailable unless observable legitimately; never fabricate heartbeat as productive work. Do not weaken tool restrictions, privacy (Hermes/Qwen redacted transcripts), 16MiB limits, cancellation/owned child cleanup. Existing APIs backward compatible additive. Add tests in tests/live-progress.test.mjs meaningful live readState before worker complete, UTF8 bytes, no output, cancelled/failed cleanup, summary old state compatibility, metadata has no output contents. No shell/tools beyond copied Read/Edit; state tests not run by you, coordinator runs. Own tools/swarm.mjs and test only. Report tradeoffs. Need bounded maintainable code style, do not implement dependency manager in this pass.",
+      "context": [
+        "tools/api-adapters.mjs",
+        "tools/cli-adapters.mjs",
+        "tests/swarm.test.mjs",
+        "tests/cli-adapters.test.mjs",
+        "docs/orchestration.md",
+        "skills/project-swarm/SKILL.md",
+        "coordination/connector-study/evidence-baseline.json"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tests/live-progress.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "study-analysis",
+      "agent": "claude",
+      "prompt": "Read anonymized evidence baseline and source/docs, produce documentation research report docs/connector-study-draft.md with observed real use case, what is measured vs unknown, concrete failings, three iteration evaluation plan and preflight checklist. No fake timings/speedups/costs, no claims new code or tests passed. This is interim observed evidence; final coordinator updates after real results. Evaluate useful next independent improvements (preflight context cost/missingpaths/dependency hazards; before/after validate explanations), scoped managers that review/report only without spawning until coordinator authorizes. Include exact source evidence, keeping private paths/names/credentials out. Real run IDs okay. This should guide code changes not marketing. Output only doc, relative links to docs correct; no source changes.",
+      "context": [
+        "README.md",
+        "docs/orchestration.md",
+        "docs/manifest-reference.md",
+        "docs/setup.md",
+        "docs/case-study.md",
+        "tools/swarm.mjs",
+        "tools/install.mjs",
+        "coordination/connector-study/evidence-baseline.json"
+      ],
+      "outputs": [
+        "docs/connector-study-draft.md"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "study": "Multi-venture CRM connector build",
+  "baseVersion": "1.2.1",
+  "baseCommit": "a18d370",
+  "observations": [
+    "Seven live Claude CLI workers across four isolated manifests; outputs single-owned.",
+    "Monitor reports lifecycle but no first/last output or activity timestamps. During running only message.txt exists; provider.jsonl/stderr.log are written on completion. Cannot distinguish silent startup vs ongoing output.",
+    "Repeated context totals 192-355KB per worker including large schema, but validate only reports total context bytes, not largest/duplicated files or dependency hazards.",
+    "Workers in one manifest snapshot inputs; no data dependencies. Integration requires whole run complete.",
+    "No sequential baseline: no proven speedup or cost saving. Usage unknown until completion."
+  ],
+  "runs": [
+    {
+      "runId": "1789670103678-2870cc78",
+      "status": "running",
+      "startedAt": "2026-09-17T18:35:03.679Z",
+      "concurrency": 2,
+      "peakConcurrency": 2,
+      "jobs": [
+        {
+          "id": "shared-keys",
+          "status": "running",
+          "queuedAt": "2026-09-17T18:35:03.690Z",
+          "startedAt": "2026-09-17T18:35:03.703Z",
+          "finishedAt": null,
+          "durationMs": null,
+          "actualModel": null,
+          "usage": null,
+          "costUsd": null
+        },
+        {
+          "id": "shared-accounts",
+          "status": "running",
+          "queuedAt": "2026-09-17T18:35:03.702Z",
+          "startedAt": "2026-09-17T18:35:03.703Z",
+          "finishedAt": null,
+          "durationMs": null,
+          "actualModel": null,
+          "usage": null,
+          "costUsd": null
+        }
+      ],
+      "contextBytes": 535787
+    },
+    {
+      "runId": "1789670271566-4e3425f2",
+      "status": "running",
+      "startedAt": "2026-09-17T18:37:51.567Z",
+      "concurrency": 2,
+      "peakConcurrency": 2,
+      "jobs": [
+        {
+          "id": "model-connectors",
+          "status": "running",
+          "queuedAt": "2026-09-17T18:37:51.582Z",
+          "startedAt": "2026-09-17T18:37:51.596Z",
+          "finishedAt": null,
+          "durationMs": null,
+          "actualModel": null,
+          "usage": null,
+          "costUsd": null
+        },
+        {
+          "id": "workspace-connectors",
+          "status": "running",
+          "queuedAt": "2026-09-17T18:37:51.595Z",
+          "startedAt": "2026-09-17T18:37:51.596Z",
+          "finishedAt": null,
+          "durationMs": null,
+          "actualModel": null,
+          "usage": null,
+          "costUsd": null
+        }
+      ],
+      "contextBytes": 529326
+    },
+    {
+      "runId": "1789670408496-0068fa69",
+      "status": "running",
+      "startedAt": "2026-09-17T18:40:08.497Z",
+      "concurrency": 2,
+      "peakConcurrency": 2,
+      "jobs": [
+        {
+          "id": "setup-experience",
+          "status": "running",
+          "queuedAt": "2026-09-17T18:40:08.519Z",
+          "startedAt": "2026-09-17T18:40:08.538Z",
+          "finishedAt": null,
+          "durationMs": null,
+          "actualModel": null,
+          "usage": null,
+          "costUsd": null
+        },
+        {
+          "id": "connections-experience",
+          "status": "running",
+          "queuedAt": "2026-09-17T18:40:08.537Z",
+          "startedAt": "2026-09-17T18:40:08.538Z",
+          "finishedAt": null,
+          "durationMs": null,
+          "actualModel": null,
+          "usage": null,
+          "costUsd": null
+        }
+      ],
+      "contextBytes": 688849
+    },
+    {
+      "runId": "1789670613119-a5021559",
+      "status": "running",
+      "startedAt": "2026-09-17T18:43:33.120Z",
+      "concurrency": 1,
+      "peakConcurrency": 1,
+      "jobs": [
+        {
+          "id": "agentmail-isolation",
+          "status": "running",
+          "queuedAt": "2026-09-17T18:43:33.130Z",
+          "startedAt": "2026-09-17T18:43:33.131Z",
+          "finishedAt": null,
+          "durationMs": null,
+          "actualModel": null,
+          "usage": null,
+          "costUsd": null
+        }
+      ],
+      "contextBytes": 192641
+    }
+  ]
+}

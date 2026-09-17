@@ -106,3 +106,11 @@ An integration lock serializes integrations through this runner. Individual file
 API jobs additionally require a complete, non-refused response and valid JSON with exactly `summary` and `files`. Each file contains only `path` and complete `content`; every declared output must occur exactly once. Responses are capped at 16 MiB, redirects are refused, and partial/truncated output is never integrated. Provider credentials/endpoints cannot appear as manifest configuration. See [provider setup](providers.md).
 
 The `monitor` command is a single read-only snapshot, suitable for periodic coordinator polling. New runs record `queuedAt`, `startedAt`, `finishedAt`, `durationMs`, configured concurrency, and observed peak active jobs. Counts reflect recorded queue state, not proof that stale processes survived a coordinator crash. Numeric usage is grouped by provider without combining incompatible token fields or estimating missing costs. Older run records remain readable; unavailable historical timings remain null.
+
+## Advisory preflight
+
+`node tools/swarm.mjs preflight <manifest>` validates without starting workers, then reports file byte breakdowns, repeated copied context, output/input snapshot hazards, and task-size advisories. It does not automatically split or dispatch tasks. See [active orchestration](orchestration.md) and [manager task contracts](managed-feature-plan.md).
+
+`monitor` includes content-free CLI byte counts and output timestamps where observable. API requests without streaming report unavailable progress; neither output nor silence proves whether a worker is making useful progress.
+
+Preflight exits **0 for a valid report even when `reviewRequired` is true**: advisories require coordinator judgment and an agreed contract can justify parallel snapshots. Invalid manifests/paths exit nonzero. CI that requires a reviewed plan must inspect `reviewRequired`, `advisories`, and `snapshotHazards`; a zero exit is validation, not approval to dispatch. Preflight reads and validates file contents (including API UTF-8 checks), so large repeated contexts also incur repeated local I/O.
