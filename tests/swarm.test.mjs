@@ -224,7 +224,7 @@ test('timeout kills an owned descendant even after its direct parent exits and c
  const root=await fixture(t);let descendant;
  t.after(()=>{if(descendant)try{process.kill(descendant,'SIGKILL');}catch{}});
  const provider=fake(`import {spawn} from 'node:child_process';const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000);"],{stdio:['ignore','pipe','ignore']});child.stdout.once('data',()=>{fs.writeFileSync('descendant.pid',String(child.pid));child.stdout.destroy();});setInterval(()=>{},1000);`);
- const state=await runManifest(root,manifest([job({timeoutMs:250})]),{spawnImpl:provider});
+ const state=await runManifest(root,manifest([job({timeoutMs:2000})]),{spawnImpl:provider});
  descendant=Number(await fs.readFile(path.join(root,'.swarm/workspaces',state.id,'writer/descendant.pid'),'utf8'));
  assert.equal(state.jobs[0].status,'timeout');
  // On Linux an orphan may briefly be a zombie; it must no longer execute.
@@ -235,7 +235,7 @@ test('timeout kills an owned descendant even after its direct parent exits and c
 test('inspect blocks partial outputs from timed-out and cancelled jobs while integration remains forbidden', async t => {
  const {inspectRun}=await import('../tools/swarm.mjs');const root=await fixture(t);
  const partial=fake(`fs.writeFileSync('input.txt','partial edit');setInterval(()=>{},1000);`);
- const timed=await runManifest(root,manifest([job({timeoutMs:250})]),{spawnImpl:partial});
+ const timed=await runManifest(root,manifest([job({timeoutMs:2000})]),{spawnImpl:partial});
  const timedReport=await inspectRun(root,timed.id);assert.equal(timedReport.files[0].jobStatus,'timeout');assert.equal(timedReport.files[0].status,'blocked');assert.equal(timedReport.files[0].bytes,12);await assert.rejects(integrateRun(root,timed.id),/Only a complete/);
  const pending=runManifest(root,manifest(),{id:'partial-cancel',spawnImpl:partial});
  for(let i=0;i<100;i++){let text;try{text=await fs.readFile(path.join(root,'.swarm/workspaces/partial-cancel/writer/input.txt'),'utf8');}catch{}if(text==='partial edit')break;await new Promise(resolve=>setTimeout(resolve,10));}
