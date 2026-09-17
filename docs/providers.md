@@ -8,11 +8,13 @@ Project Swarm 1.2 supports seven adapters. Configure only the providers your man
 - **Qwen (`qwen`)** is Qwen Code (the best match for the requested “Quin”). It receives copied text through stdin under safe mode, default approval, a zero tool-call budget, and one turn. It never uses the synthetic JSON-schema tool exemption.
 
 
-- **Claude (`claude`)** starts a fresh restricted CLI process with copied files and scoped file tools. Authentication belongs to the installed Claude Code CLI. The repository's Forge case study records real Claude exchanges.
+- **Claude (`claude`)** starts a fresh restricted CLI process with copied files and scoped file tools. Authentication belongs to the installed Claude Code CLI. The repository's website case study records real Claude exchanges.
 - **OpenAI (`openai`)** makes one Responses API request with strict structured output and no tools. It reads `OPENAI_API_KEY` from the coordinator environment; a ChatGPT or Codex login is not automatically an API credential.
 - **Gemini (`gemini`)** makes one `generateContent` request with JSON schema output and no tools. It reads `GEMINI_API_KEY`, falling back to `GOOGLE_API_KEY` when the first is absent.
 - **Ollama (`ollama`)** makes one chat request to a server you already operate, using JSON schema output. Its default is `http://127.0.0.1:11434`. Select a model already available on that server. No Claude or cloud account is needed for an unauthenticated local server.
 - **Lambda (`lambda`)** makes one OpenAI-compatible chat-completions request with a strict JSON schema and no tools. Its default is hosted Lambda Inference at `https://api.lambda.ai`, reading `LAMBDA_API_KEY`. Set `SWARM_LAMBDA_URL` to an origin you operate to use your own GPU host instead; the key is optional there.
+
+Lambda's [official inference page](https://lambda.ai/inference) says its hosted Inference API is winding down. For new setups, plan around an operator-owned endpoint with schema-constrained output. Hosted access remains unverified; the wind-down notice does not establish a shutdown date. The contributor reports a separate self-hosted vLLM exercise, which does not verify another account, host, or model.
 
 API jobs receive only selected UTF-8 text files, including existing output files. They cannot browse your repository, execute tests, use MCP, view images, or call tools. They return a summary and complete file contents, which the runner validates before writing into the copied workspace. The coordinator still reviews and integrates them. UI review recipes evaluate supplied source or written flows, not rendered screenshots.
 
@@ -44,7 +46,7 @@ node tools/swarm.mjs status <run-id>
 node tools/swarm.mjs inspect <run-id>
 ```
 
-Each API smoke has empty context, one declared Markdown output, a 1,024-token output limit, and a two-minute timeout. Review the proposed file and summary, then integrate. For a read-only smoke, change `outputs` to `[]` and ask for an acknowledgment in the summary. Installed copies use `coordination/swarm-openai-smoke.json` (or the corresponding provider name).
+Each API smoke has empty context, one declared Markdown output, and a two-minute timeout. The output limit is 1,024 tokens except for Lambda's 2,048-token example. Increase it if your model needs additional reasoning allowance. Review the proposed file and summary, then integrate. For a read-only smoke, change `outputs` to `[]` and ask for an acknowledgment in the summary. Installed copies use `coordination/swarm-openai-smoke.json` (or the corresponding provider name).
 
 The four API adapters have deterministic mocked-transport tests covering their contracts and failure handling. They have **not been verified against live cloud credentials, a live Ollama model, or a live Lambda endpoint as part of this release**. A passing test or doctor result is not such verification. Record your own observed resolved model and successful read-only/writing exchanges before assigning substantial work. Missing model metadata stays null rather than being inferred.
 

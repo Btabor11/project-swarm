@@ -16,7 +16,7 @@ Start from the outcome and split the work by independent questions or file owner
 
 Use the smallest context that is sufficient, not the entire repository. Ask for exact source evidence and require workers to distinguish demonstrated defects from hypotheses. Source-only UI reviewers cannot judge rendered pixels; reserve browser checks and visual judgment for the coordinator.
 
-The default concurrency is two. Version 1.2 permits up to 32 simultaneous jobs and 256 total jobs per manifest, but a larger number does not create more independent work or guarantee faster results. The Forge case demonstrated six real Claude workers at once. Start with two to four meaningful tasks, then increase only when your workload, machine, account limits, and review capacity justify it.
+The default concurrency is two. Version 1.2 permits up to 32 simultaneous jobs and 256 total jobs per manifest, but a larger number does not create more independent work or guarantee faster results. The website case demonstrated six real Claude workers at once. Start with two to four meaningful tasks, then increase only when your workload, machine, account limits, and review capacity justify it.
 
 ## Parallel independent reviews
 
@@ -26,7 +26,7 @@ Good assignments request evidence:
 
 > Review the supplied renderer for unnecessary framebuffer reallocations. Identify the exact code path, explain when it runs, and distinguish demonstrated defects from performance hypotheses. Do not edit the renderer or claim measured timings.
 
-Reviewers do not automatically agree with each other, and their responses are not votes. Reproduce each actionable claim and document the decision. The [Forge case study](forge-case-study.md) includes both accepted and rejected findings.
+Reviewers do not automatically agree with each other, and their responses are not votes. Reproduce each actionable claim and document the decision. The [website case study](case-study.md) includes both accepted and rejected findings.
 
 ## Parallel implementation
 
@@ -87,7 +87,7 @@ Report these facts to the user:
 
 Avoid claiming that the swarm deployed, tested, browsed, or communicated with other agents when those capabilities were not available to its workers.
 
-For example, Forge's six-worker run produced a browser-test file and five focused reviews. The coordinator integrated the reviewed outputs, ran the browser checks, and made evidence-based accessibility and motion fixes. The accurate report distinguishes “the worker wrote tests” from “the coordinator executed them.” See the [case study](forge-case-study.md) for the actual assignments and limits of the concurrency evidence.
+For example, the website project's six-worker run produced a browser-test file and five focused reviews. The coordinator integrated the reviewed outputs, ran the browser checks, and made evidence-based accessibility and motion fixes. The accurate report distinguishes “the worker wrote tests” from “the coordinator executed them.” See the [case study](case-study.md) for the actual assignments and limits of the concurrency evidence.
 
 ## Included task recipes
 

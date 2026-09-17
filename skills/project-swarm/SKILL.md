@@ -50,7 +50,7 @@ Run `node --test tests/swarm.test.mjs tests/adapters.test.mjs tests/cli-adapters
 
 To reuse, clone the standalone package and run `node tools/install.mjs /path/to/existing-project`. This installs the runner, tests, project-local skill, references, examples, and license notices; identical repeated installs are safe and differing existing files are refused. Add `.swarm/` to that project's `.gitignore`. Alternatively use `node /path/to/project-swarm/tools/swarm.mjs --root /path/to/project <command> <argument>` without copying the toolkit. `--root` selects one explicit project; workers still receive only declared files. No global settings are modified.
 
-Consult [setup](references/setup.md), [workflow recipes](references/workflows.md), [command and manifest reference](references/manifest-reference.md), [extension guide](references/extending.md), and [the Forge case study](references/forge-case-study.md) when installed. In the standalone repository these guides live in `docs/`. Report actual provider model metadata from run status; an alias is not proof of which model answered.
+Consult [setup](references/setup.md), [workflow recipes](references/workflows.md), [command and manifest reference](references/manifest-reference.md), [extension guide](references/extending.md), and [the website case study](references/case-study.md) when installed. In the standalone repository these guides live in `docs/`. Report actual provider model metadata from run status; an alias is not proof of which model answered.
 
 ## Execute an active work queue
 

@@ -32,3 +32,11 @@ AI-assisted contributions are welcome. The contributor remains responsible for r
 By submitting a contribution, you agree that it is provided under this repository's Apache License 2.0. Do not submit secrets, customer code, private logs, or material you are not authorized to contribute.
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## Before publishing a contribution
+
+Use your own GitHub-provided private commit email if you do not want your personal or work email in public history. Find the exact address in [GitHub email settings](https://github.com/settings/emails), enable email privacy and push blocking, then set `git config --local user.email "YOUR_GITHUB_NOREPLY_ADDRESS"` in this checkout. Changing this setting affects future commits, not existing history. Do not replace another contributor's identity or rewrite shared history without coordination.
+
+Keep case studies anonymous unless you have permission to identify the project. Exclude customer data, private source, internal paths, business-specific limits, and private transcripts. Review release descriptions and attachments as well as tracked files.
+
+`.gitignore` and the package checker are not secret scanners. Run a dedicated scanner such as `gitleaks git . --log-opts=--all --redact` before publishing and keep repository secret scanning and push protection enabled. A clean scan means no supported patterns were detected; it does not prove there are no secrets or confidential details. Use synthetic credentials in tests.

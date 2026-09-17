@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.2.1
 
 - Add a `lambda` adapter: one OpenAI-compatible chat-completions request with a strict JSON schema and no tools, against hosted Lambda Inference or an operator-owned `SWARM_LAMBDA_URL` origin under the existing origin rules.
 - Reject Lambda responses that are truncated, refused, tool-calling, or absent, and keep `LAMBDA_API_KEY` out of logs and saved outputs.
-- Contract tested with mocked transport only; live Lambda account, host, and model access is not claimed.
+- Package validation uses mocked transport; hosted Lambda access remains unverified. The contributor reports a separate self-hosted vLLM exercise; this is not a guarantee of another account or model.
+- Increase startup headroom in two timeout tests without weakening their assertions.
+- Keep fresh checkouts on LF and accept existing CRLF skill frontmatter in package checks.
+- Anonymize the public website case study and remove customer-specific implementation details.
+- Refresh provider discovery and document safe public contributions.
 
 
 ## 1.2.0
@@ -32,7 +36,7 @@
 
 ## 1.0.0
 
-First standalone package extracted from the Forge website project's local orchestration tools.
+First standalone package extracted from the example website project's local orchestration tools.
 
 - Fresh Claude Code workers with explicit model selection and concurrency from one to three.
 - Explicit input/output manifests, copied workspaces, bounded runtime and logs, and local run records.
@@ -41,7 +45,7 @@ First standalone package extracted from the Forge website project's local orches
 - Local prerequisite diagnostics, manifest validation, and proposed-change inspection.
 - An explicit target-project root option and an installer that refuses destination overwrites.
 - A reusable orchestration skill, smoke and parallel-review examples, deterministic tests, and setup and extension guides.
-- A factual Forge case study distinguishing direct CLI implementation from reusable-runner smoke and review jobs.
+- A factual website case study distinguishing direct CLI implementation from reusable-runner smoke and review jobs.
 - Apache License 2.0.
 
 In 1.0.0, the supported adapter was Claude Code only. Copied workspaces are not an OS security sandbox; Windows support is not claimed.

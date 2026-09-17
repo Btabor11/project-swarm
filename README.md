@@ -2,7 +2,7 @@
 
 **Give one coordinator a mission. Let scoped workers handle independent pieces. Review and integrate the results.**
 
-Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code, Hermes, and Qwen Code workers plus tool-free OpenAI, Gemini, and Ollama API jobs inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
+Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code, Hermes, and Qwen Code workers plus tool-free OpenAI, Gemini, Ollama, and Lambda API jobs inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
 
 It is designed for a human or coding agent acting as the coordinator. The coordinator decides the tasks, supplies context, reviews findings, integrates changes, and verifies the final product.
 
@@ -135,7 +135,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - [Workflow recipes and coordinator prompts](docs/workflows.md)
 - [Manifest and command reference](docs/manifest-reference.md)
 - [Modifying the runner and adding providers](docs/extending.md)
-- [Real-world Forge case study](docs/forge-case-study.md)
+- [Real-world website case study](docs/case-study.md)
 - [Contribution guide](CONTRIBUTING.md)
 - [Security and limitations](SECURITY.md)
 - [Changelog](CHANGELOG.md)
@@ -144,4 +144,4 @@ Seven adapters are implemented: `claude`, `hermes` (Nous Research CLI), `qwen` (
 
 Use the included recipes for code review, UI source review, documentation, test planning, four-worker Claude reviews, and mixed-provider reviews. API workers do not see rendered screenshots or run tests. The coordinator performs those checks. Hermes and Qwen use serialized copied context and strict JSON file envelopes; they do not get file-editing tools through this adapter. Their compatibility and authentication must be checked independently. Raising concurrency is opt-in and increases simultaneous resource use; it is not a spending cap.
 
-The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `Btabor11` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own provider authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no Forge website assets, customer data, credentials, or private agent transcripts.
+The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `Btabor11` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own provider authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no example website assets, customer data, credentials, or private agent transcripts.
