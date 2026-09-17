@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "lambda-smoke",
+      "agent": "lambda",
+      "model": "llama3.3-70b-instruct-fp8",
+      "prompt": "Write one sentence acknowledging this bounded communication test. Do not claim to run tests.",
+      "context": [],
+      "outputs": [
+        "coordination/lambda-handshake.md"
+      ],
+      "maxOutputTokens": 2048,
+      "timeoutMs": 120000
+    }
+  ]
+}

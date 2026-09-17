@@ -33,7 +33,7 @@ Unknown top-level fields are rejected.
 ## Job fields
 
 - `id`: required unique string, 1–80 characters. The first character is an ASCII letter or digit; remaining characters may also include `_` and `-`.
-- `agent`: required: `"claude"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, or `"ollama"`.
+- `agent`: required: `"claude"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, or `"lambda"`.
 - `model`: model identifier or alias. Optional for CLI jobs; required for API jobs. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Syntax validation does not prove provider availability.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
 - `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for the worker to read.

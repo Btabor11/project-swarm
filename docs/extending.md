@@ -14,7 +14,7 @@ The worker can edit a test file but cannot run it with this adapter. Run it your
 
 ## Choose a provider and model
 
-Set `agent` to `claude`, `openai`, `gemini`, or `ollama`, and add or change `model` in the job. API jobs require a model; Claude can use its CLI default. Keep the rest of the manifest unchanged. Verify the resolved model through the recorded provider events or metadata. Model aliases can change and account access differs; do not hardcode an observed historical identifier into claims about every installation.
+Set `agent` to `claude`, `openai`, `gemini`, `ollama`, or `lambda`, and add or change `model` in the job. API jobs require a model; Claude can use its CLI default. Keep the rest of the manifest unchanged. Verify the resolved model through the recorded provider events or metadata. Model aliases can change and account access differs; do not hardcode an observed historical identifier into claims about every installation.
 
 Changing models does not change the job's tools, file ownership, or integration requirements.
 
@@ -26,7 +26,7 @@ If changing these limits in code, update validation, tests, the skill, and this 
 
 ## Add a provider adapter
 
-Claude Code and three HTTP adapters are implemented. The shared runner owns paths, copies, scheduling, and integration; `tools/api-adapters.mjs` owns fixed request construction, bounded responses, and strict file-envelope parsing. Another provider requires code and tests, not an arbitrary executable or URL in a manifest.
+Claude Code and four HTTP adapters are implemented. The shared runner owns paths, copies, scheduling, and integration; `tools/api-adapters.mjs` owns fixed request construction, bounded responses, and strict file-envelope parsing. Another provider requires code and tests, not an arbitrary executable or URL in a manifest.
 
 A provider contribution should include:
 
