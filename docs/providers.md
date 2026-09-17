@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm 1.2 supports six adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm 1.2 supports seven adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 
@@ -12,6 +12,7 @@ Project Swarm 1.2 supports six adapters. Configure only the providers your manif
 - **OpenAI (`openai`)** makes one Responses API request with strict structured output and no tools. It reads `OPENAI_API_KEY` from the coordinator environment; a ChatGPT or Codex login is not automatically an API credential.
 - **Gemini (`gemini`)** makes one `generateContent` request with JSON schema output and no tools. It reads `GEMINI_API_KEY`, falling back to `GOOGLE_API_KEY` when the first is absent.
 - **Ollama (`ollama`)** makes one chat request to a server you already operate, using JSON schema output. Its default is `http://127.0.0.1:11434`. Select a model already available on that server. No Claude or cloud account is needed for an unauthenticated local server.
+- **Lambda (`lambda`)** makes one OpenAI-compatible chat-completions request with a strict JSON schema and no tools. Its default is hosted Lambda Inference at `https://api.lambda.ai`, reading `LAMBDA_API_KEY`. Set `SWARM_LAMBDA_URL` to an origin you operate to use your own GPU host instead; the key is optional there.
 
 API jobs receive only selected UTF-8 text files, including existing output files. They cannot browse your repository, execute tests, use MCP, view images, or call tools. They return a summary and complete file contents, which the runner validates before writing into the copied workspace. The coordinator still reviews and integrates them. UI review recipes evaluate supplied source or written flows, not rendered screenshots.
 
@@ -22,9 +23,10 @@ node tools/swarm.mjs doctor all
 node tools/swarm.mjs doctor openai
 node tools/swarm.mjs doctor gemini
 node tools/swarm.mjs doctor ollama
+node tools/swarm.mjs doctor lambda
 ```
 
-`doctor` without an argument checks Claude for backward compatibility. `doctor all` reports each provider independently. API `configured` means an environment credential is present, or an Ollama origin has been selected. `liveVerified: false` is deliberate: diagnostics do not contact endpoints or prove authentication, model access, server health, quota, or output-schema support. `run` checks only the providers its jobs actually select.
+`doctor` without an argument checks Claude for backward compatibility. `doctor all` reports each provider independently. API `configured` means an environment credential is present, or an Ollama or Lambda origin you operate has been selected. `liveVerified: false` is deliberate: diagnostics do not contact endpoints or prove authentication, model access, server health, quota, or output-schema support. `run` checks only the providers its jobs actually select.
 
 Configure credentials using your normal secure environment/secret manager, outside the worker. Never put real keys in a manifest, command example committed to Git, prompt, or copied context. The runner does not read `.env` automatically. If you choose Node's environment-file feature, keep that file outside version control and never include it as context. API account access and billing are separate from cloning this public repository.
 
@@ -37,18 +39,18 @@ Read and adapt one example before executing it. The example model names are star
 ```sh
 node tools/swarm.mjs validate examples/openai-smoke.json
 node tools/swarm.mjs run examples/openai-smoke.json
-# Alternatives: examples/gemini-smoke.json or examples/ollama-smoke.json
+# Alternatives: examples/gemini-smoke.json, examples/ollama-smoke.json, or examples/lambda-smoke.json
 node tools/swarm.mjs status <run-id>
 node tools/swarm.mjs inspect <run-id>
 ```
 
 Each API smoke has empty context, one declared Markdown output, a 1,024-token output limit, and a two-minute timeout. Review the proposed file and summary, then integrate. For a read-only smoke, change `outputs` to `[]` and ask for an acknowledgment in the summary. Installed copies use `coordination/swarm-openai-smoke.json` (or the corresponding provider name).
 
-The three API adapters have deterministic mocked-transport tests covering their contracts and failure handling. They have **not been verified against live cloud credentials or a live Ollama model as part of this release**. A passing test or doctor result is not such verification. Record your own observed resolved model and successful read-only/writing exchanges before assigning substantial work. Missing model metadata stays null rather than being inferred.
+The four API adapters have deterministic mocked-transport tests covering their contracts and failure handling. They have **not been verified against live cloud credentials, a live Ollama model, or a live Lambda endpoint as part of this release**. A passing test or doctor result is not such verification. Record your own observed resolved model and successful read-only/writing exchanges before assigning substantial work. Missing model metadata stays null rather than being inferred.
 
 ## Limits, cancellation, and errors
 
-All API jobs must name `model`. `maxOutputTokens` defaults to 8,192 and accepts 256–32,768; choose a smaller value for simple tasks. Provider reasoning may consume output allowance. Incomplete, refused, malformed, oversized, or wrongly scoped output fails the job; partial files are not accepted. There are no automatic retries.
+All API jobs must name `model`. `maxOutputTokens` defaults to 8,192 and accepts 256–32,768; choose a smaller value for simple tasks. Provider reasoning may consume output allowance. This is not a small effect on a reasoning model: an observed vLLM deployment with a reasoning parser returned `finish_reason: "length"` and null content on a trivial task at 512 tokens, intermittently, because the whole budget went to reasoning the model never emitted as content. The job fails closed rather than writing a partial file, but the cause looks like a schema or load fault and is neither. Budget for reasoning plus the envelope, and prefer a generous cap: an unused allowance costs nothing. Incomplete, refused, malformed, oversized, or wrongly scoped output fails the job; partial files are not accepted. There are no automatic retries.
 
 Concurrency defaults to 2 and can be explicitly set from 1 to 32 across providers. More concurrent jobs can increase resource load and simultaneous charges. Tokens and timeouts are not dollar budgets. Cancellation aborts the local HTTP request and response reading, but remote work or charges may already have occurred. API cost is recorded as unavailable, not calculated from assumed prices.
 
@@ -59,6 +61,8 @@ HTTP failures record a status and omit the response body. Transport and response
 OpenAI and Gemini use fixed HTTPS endpoints. Arbitrary base-URL environment variables are intentionally ignored, and manifests cannot specify endpoints. Redirects are refused, including same-origin redirects, to avoid forwarding credentials to another destination.
 
 Ollama accepts an optional **operator-controlled** `SWARM_OLLAMA_URL` containing only an origin, for example `http://127.0.0.1:11434` or an explicitly trusted `https://models.example.com`. HTTP is allowed only for the exact loopback hosts `127.0.0.1`, `[::1]`, and `localhost`; remote hosts require HTTPS. Credentials in URLs, query strings, paths, and fragments are rejected. `OLLAMA_API_KEY`, if present, is sent only to the selected Ollama origin. Setting a remote origin explicitly trusts it with your copied files and that key. DNS, machine policy, and remote service ownership are not authenticated by this toolkit.
+
+Lambda applies the same origin rule to `SWARM_LAMBDA_URL`, defaulting to `https://api.lambda.ai` when unset. `LAMBDA_API_BASE` and other base-URL variables are intentionally ignored. A loopback origin such as `http://127.0.0.1:8000` is accepted so an SSH tunnel to a rented GPU host needs no certificate; any other host must be HTTPS. The adapter sends `response_format` with a strict JSON schema, so the selected model must support schema-constrained decoding. If it does not, choose a model that does or serve one that supports guided decoding; do not weaken envelope validation to compensate.
 
 This is an Ollama chat/schema adapter, not a universal OpenAI-compatible proxy adapter. It does not assume every local model supports JSON schema reliably. If local inference is slow, first reduce input/output scope and concurrency rather than disabling validation.
 
