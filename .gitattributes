@@ -1,0 +1,3 @@
+# The runner, its tests and the package check are line-ending sensitive; keep
+# every working tree on LF so a Windows checkout behaves like CI.
+* text=auto eol=lf

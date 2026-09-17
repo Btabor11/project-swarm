@@ -31,5 +31,5 @@ for(const file of files){
 for(const file of await fs.readdir(path.join(root,'examples')))validateManifest(JSON.parse(await fs.readFile(path.join(root,'examples',file),'utf8')));
 const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
 assert.equal(pkg.license,'Apache-2.0');assert.match(pkg.version,/^\d+\.\d+\.\d+$/);assert.equal(pkg.private,true);
-assert.match(await fs.readFile(path.join(root,'skills/project-swarm/SKILL.md'),'utf8'),/^---\nname: project-swarm\ndescription: /);
+assert.match(await fs.readFile(path.join(root,'skills/project-swarm/SKILL.md'),'utf8'),/^---\r?\nname: project-swarm\r?\ndescription: /);
 console.log(`Package checks passed: ${files.length} files, syntax, links, license, skill, examples.`);
