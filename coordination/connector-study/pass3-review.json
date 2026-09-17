@@ -1,0 +1,6 @@
+{
+ "version":1,"concurrency":1,"jobs":[{
+  "id":"dispatch-review","agent":"claude","timeoutMs":480000,
+  "prompt":"Review the new preflight CLI and live progress recorder for concrete correctness/security regressions or misleading claims. Read only copied files. Do not edit. Focus on path safeguards, asynchronous failure cleanup, preflight CLI actual invocation and installer coverage. Report maximum five actionable findings with file/line and reproduce reasoning, or clearly no findings. Tests already run71pass, don't repeat an unsupported test claim. This is an independent final technical review, keep it bounded.",
+  "context":["tools/swarm.mjs","tools/preflight.mjs","tools/install.mjs","tests/preflight.test.mjs","tests/live-progress.test.mjs","tests/install.test.mjs"],"outputs":[]
+ }]}

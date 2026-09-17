@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add preflight context breakdowns, snapshot-dependency warnings, and task-sizing advisories.
+- Teach coordinators to split independent deliverables, use small integration batches, and preserve one writer per file.
+- Add content-free live CLI output telemetry with explicit non-streaming API limitations.
+- Document a real parallel connector/village build, measured integration waiting, and validation limits.
+- Include new runtime modules and regression suites in the installer.
+
 ## 1.2.1
 
 - Add a `lambda` adapter: one OpenAI-compatible chat-completions request with a strict JSON schema and no tools, against hosted Lambda Inference or an operator-owned `SWARM_LAMBDA_URL` origin under the existing origin rules.
