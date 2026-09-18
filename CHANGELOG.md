@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Check decoded API output strings for echoed provider keys before saving summaries, files, or metadata, including JSON-escaped echoes.
+- Give every Lambda request a fresh routing-session nonce, including repeated runs with the same job ID in one process.
 - Add preflight context breakdowns, snapshot-dependency warnings, and task-sizing advisories.
 - Teach coordinators to split independent deliverables, use small integration batches, and preserve one writer per file.
 - Add content-free live CLI output telemetry with explicit non-streaming API limitations.
