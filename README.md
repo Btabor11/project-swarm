@@ -145,6 +145,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - [Workflow recipes and coordinator prompts](docs/workflows.md)
 - [Manifest and command reference](docs/manifest-reference.md)
 - [Modifying the runner and adding providers](docs/extending.md)
+- [Automation handoff integration study](docs/automation-integration-study.md)
 - [Real-world website case study](docs/case-study.md)
 - [Contribution guide](CONTRIBUTING.md)
 - [Security and limitations](SECURITY.md)
