@@ -80,6 +80,8 @@ Use `preflight` to expose context size and snapshot hazards. Group jobs into sma
 
 The [connector and village study](docs/connector-swarm-study.md) records observed wait time, changes, and limits. It does not claim a measured speedup without a controlled comparison.
 
+The [mission readiness follow-up](docs/automation-integration-study.md) shows why an automatic workflow needs an eligible worker as well as a ready manager, tests using its bundled prompts, and real provider proof before claiming activation readiness. It records executed checks and distinguishes preparation, activation, execution, and business outcomes.
+
 ## What happens during a run
 
 ```mermaid

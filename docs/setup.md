@@ -123,3 +123,11 @@ check after the producer and consumer interfaces settle. Exercise the real
 handoff with a controlled external provider; test results from the two workers
 separately do not establish that queued work starts. See the
 [automation integration study](automation-integration-study.md).
+
+For automatic agent features, include the installed manager and eligible worker
+in readiness checks. Use the bundled prompts and effective permission limits
+in acceptance fixtures. A provider key or model name being present is not a
+successful tool round trip; verify the selected route with synthetic data when
+activation depends on tool use. Keep prepared, activated, and observed outcome
+claims distinct. The [mission readiness follow-up](automation-integration-study.md)
+records the setup and verification gaps found in a real CRM implementation.
