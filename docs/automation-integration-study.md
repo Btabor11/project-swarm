@@ -129,3 +129,71 @@ verification belong in the consuming project's release evidence; publishing
 this study does not imply they have passed. A paused team is
 prepared; a saved enabled configuration is activated; recorded queue/run
 events establish execution; the resulting CRM records establish the outcome.
+
+## Operator pause/resume follow-up
+
+The next CRM request added a prominent Autonomous mode switch and an in-app
+operator guide. Three authorized native workers ran alongside the coordinator:
+one owned pause/resume and durable-claim behavior, one owned the switch and
+activity interface, and one owned the operator guide and its scope. After the
+interface was implemented, the UI worker independently reviewed the backend;
+then that worker moved to this skill study while the backend owner continued
+its fixes and focused checks. These were staged ownership changes, not two
+writers editing the same implementation file.
+
+The agreed product boundary was more specific than stopping a scheduler:
+OFF stops discovery and later claims of queued mission-origin work, including
+its delegated tasks and completion reviews. Already claimed work may finish.
+Manual instructions and independent schedules continue under their existing
+controls. Queued work is retained for resume, with its attempt budget intact;
+a mode change preserves mission choices, limits, and the discovery cursor.
+The claim filter evaluates mission ancestry before limiting queue candidates,
+so paused mission rows do not fill every candidate slot ahead of manual work.
+
+Independent review found that the older settings save still accepted the
+browser's `enabled` value. A tab opened while ON could later save an interval
+after another tab switched OFF, thereby resuming autonomy without using the
+new switch. The backend owner changed settings saves to preserve the current
+database mode, and the focused regression check passed for an older ON form
+saved after OFF. A hidden form field is still client state, not evidence of
+the latest operator decision.
+
+Review also identified a connection-pool risk in the proposed toggle: it held
+a transaction connection and a venture lock, then issued readiness queries
+through the global database pool. With eight pool connections, eight concurrent
+requests could occupy the pool while the admitted transaction waited for a
+ninth connection. This was a static review finding, not a reproduced deadlock
+or measured outage. It justified checking resource acquisition across helper
+boundaries, as well as SQL row-lock ordering. After the backend change, a
+focused check with twelve concurrent ON requests passed. That is evidence
+about the revised implementation under the tested load; it does not reproduce
+the proposed deadlock in the earlier implementation or prove arbitrary load
+capacity.
+
+For the UI lane, the TypeScript check, scoped ESLint, and diff check passed.
+The consuming project's 27 focused backend checks passed, including the
+concurrent ON case, stale-form pause preservation, thirty paused queue entries
+ahead of eligible work, manual-work descendants, and invalid ancestry with
+cycles, foreign parents, or excessive depth. Browser checks found no overflow
+at 320px or 390px on the controls and guide. A refused keyboard toggle stayed
+OFF and preserved an unsaved 75-minute interval. Guide accordion interaction
+and navigation back to controls also passed.
+
+The broader CRM regression suite subsequently exposed a scan-cursor test
+assumption; the backend owner was adjusting test clocks when these observations
+were recorded. Full CRM release verification was therefore still pending.
+These focused results do not claim that the whole suite or production release
+passed. No real customer work, toolkit provider exchange, or production toggle
+was performed to write this study.
+
+An independent worker applied the revised skill to a billing-report pipeline
+scenario. Its static forward-check derived pause boundaries, stale-UI checks,
+and pool-concurrency testing requirements. This checks transfer of the guidance
+to another workflow; it was not a live pipeline run or execution benchmark.
+
+The narrow skill update now asks for an explicit pause boundary, stale-form
+coverage, retained retry/cursor state, eligible-work fairness, and a review of
+lock and pool usage. The value observed here was that an independent lane
+found a second mutation path that could undo pause and a cross-helper resource
+risk. No sequential baseline, cost comparison, or delivery-speed measurement
+was collected, so this case makes no speedup claim.
