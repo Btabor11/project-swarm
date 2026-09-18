@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
 class AdapterError extends Error {}
@@ -131,7 +131,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const limit = job.maxOutputTokens ?? 8192;
     if (job.agent === 'openai') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, instructions, input, store: false, stream: false, max_output_tokens: limit, tools: [], text: { format: { type: 'json_schema', name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'gemini') { headers['x-goog-api-key'] = config.key; url += `${encodeURIComponent(job.model)}:generateContent`; body = { systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: limit, candidateCount: 1 } }; }
-    else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomUUID()}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
+    else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, format: schema, options: { num_predict: limit } }; }
     let response;
     try { response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: controller.signal }); }
