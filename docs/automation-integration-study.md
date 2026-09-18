@@ -153,10 +153,10 @@ so paused mission rows do not fill every candidate slot ahead of manual work.
 Independent review found that the older settings save still accepted the
 browser's `enabled` value. A tab opened while ON could later save an interval
 after another tab switched OFF, thereby resuming autonomy without using the
-new switch. This was an identified code path and concrete stale-form scenario;
-at the time this study was written, the backend owner was implementing a save
-path that preserves the current database mode. A hidden form field is still
-client state, not evidence of the latest operator decision.
+new switch. The backend owner changed settings saves to preserve the current
+database mode, and the focused regression check passed for an older ON form
+saved after OFF. A hidden form field is still client state, not evidence of
+the latest operator decision.
 
 Review also identified a connection-pool risk in the proposed toggle: it held
 a transaction connection and a venture lock, then issued readiness queries
@@ -164,14 +164,32 @@ through the global database pool. With eight pool connections, eight concurrent
 requests could occupy the pool while the admitted transaction waited for a
 ninth connection. This was a static review finding, not a reproduced deadlock
 or measured outage. It justified checking resource acquisition across helper
-boundaries, as well as SQL row-lock ordering. The consuming project's tests
-and release evidence must record whether and how the risk was resolved.
+boundaries, as well as SQL row-lock ordering. After the backend change, a
+focused check with twelve concurrent ON requests passed. That is evidence
+about the revised implementation under the tested load; it does not reproduce
+the proposed deadlock in the earlier implementation or prove arbitrary load
+capacity.
 
 For the UI lane, the TypeScript check, scoped ESLint, and diff check passed.
-The backend acceptance checks and final browser/release checks were still in
-progress when this evidence was captured; this study does not mark them as
+The consuming project's 27 focused backend checks passed, including the
+concurrent ON case, stale-form pause preservation, thirty paused queue entries
+ahead of eligible work, manual-work descendants, and invalid ancestry with
+cycles, foreign parents, or excessive depth. Browser checks found no overflow
+at 320px or 390px on the controls and guide. A refused keyboard toggle stayed
+OFF and preserved an unsaved 75-minute interval. Guide accordion interaction
+and navigation back to controls also passed.
+
+The broader CRM regression suite subsequently exposed a scan-cursor test
+assumption; the backend owner was adjusting test clocks when these observations
+were recorded. Full CRM release verification was therefore still pending.
+These focused results do not claim that the whole suite or production release
 passed. No real customer work, toolkit provider exchange, or production toggle
 was performed to write this study.
+
+An independent worker applied the revised skill to a billing-report pipeline
+scenario. Its static forward-check derived pause boundaries, stale-UI checks,
+and pool-concurrency testing requirements. This checks transfer of the guidance
+to another workflow; it was not a live pipeline run or execution benchmark.
 
 The narrow skill update now asks for an explicit pause boundary, stale-form
 coverage, retained retry/cursor state, eligible-work fairness, and a review of
