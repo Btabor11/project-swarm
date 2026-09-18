@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
+import { randomBytes } from 'node:crypto';
 export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
-// Per-process nonce so a lambda run's items get unique X-Helm-Session values across
-// runs; combined with the per-job id below they are unique per request.
-const LAMBDA_RUN_NONCE = Math.random().toString(36).slice(2, 10);
 class AdapterError extends Error {}
 const fail = message => { throw new AdapterError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -133,7 +131,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const limit = job.maxOutputTokens ?? 8192;
     if (job.agent === 'openai') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, instructions, input, store: false, stream: false, max_output_tokens: limit, tools: [], text: { format: { type: 'json_schema', name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'gemini') { headers['x-goog-api-key'] = config.key; url += `${encodeURIComponent(job.model)}:generateContent`; body = { systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: limit, candidateCount: 1 } }; }
-    else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${LAMBDA_RUN_NONCE}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
+    else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, format: schema, options: { num_predict: limit } }; }
     let response;
     try { response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: controller.signal }); }
@@ -141,10 +139,14 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const result = extract(job.agent, await readJson(response));
     if (reason || signal?.aborted || await cancelled()) fail('Request cancelled');
     // Raw responses/headers/errors are never logged. Reject echoed auth before saving any output.
-    const credentials = ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY'].map(key => env[key]).filter(value => typeof value === 'string' && value.length >= 8);
-    if (credentials.some(key => JSON.stringify(result).includes(key))) fail('Provider response contained a credential; output discarded');
+    const credentials = ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY'].map(key => env[key]).filter(value => typeof value === 'string' && value.length > 0);
+    if (credentials.some(key => key.length >= 8 && JSON.stringify(result).includes(key))) fail('Provider response contained a credential; output discarded');
     let envelope; try { envelope = JSON.parse(result.text); } catch { fail('Worker returned malformed structured output'); }
     validateEnvelope(envelope, job.outputs);
+    // JSON escapes can hide an echo until content is decoded. Scan the strings
+    // we retain, not envelope property names that may match a short local key.
+    const retainedStrings = [envelope.summary, ...envelope.files.flatMap(file => [file.path, file.content]), result.actualModel, ...Object.keys(result.usage || {})].filter(value => typeof value === 'string');
+    if (credentials.some(key => retainedStrings.some(value => value.includes(key)))) fail('Provider response contained a credential; output discarded');
     return { status: 'complete', error: null, files: envelope.files, response: envelope.summary, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: null, exitCode: null, stderr: '', stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage }) + '\n' };
   } catch (error) {
     return { status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: reason || (error instanceof AdapterError ? error.message : 'Provider processing failed; details omitted to protect credentials'), files: [], stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: null, exitCode: null };
