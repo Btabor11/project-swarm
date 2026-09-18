@@ -117,3 +117,9 @@ The owner name in the URL is the source repository location. You do not sign int
 Run `node tools/swarm.mjs preflight coordination/my-tasks.json` before dispatch. Resolve invalid paths, inspect large context/output warnings, and split independent concerns into bounded deliverables. Output-to-context dependencies use the starting snapshot, even with concurrency one: integrate the producer before starting a dependent batch, or supply an explicit stable interface contract. See [orchestration](orchestration.md) for the checklist and sizing guidance.
 
 `monitor` now reports CLI stdout/stderr byte counts and last-output times without including worker prose in progress metadata. API workers without streaming remain explicitly unobservable. An output timestamp is an activity signal, not evidence of task correctness.
+
+For features with a queue and background worker, reserve a dependent integration
+check after the producer and consumer interfaces settle. Exercise the real
+handoff with a controlled external provider; test results from the two workers
+separately do not establish that queued work starts. See the
+[automation integration study](automation-integration-study.md).
