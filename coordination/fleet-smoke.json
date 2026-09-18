@@ -1,0 +1,4 @@
+{ "version":1, "concurrency":2, "jobs":[
+ {"id":"a","agent":"lambda","model":"local-senior","prompt":"Reply with one short sentence confirming the shared dev swarm is reachable.","context":[],"outputs":["coordination/fleet-a.md"],"timeoutMs":120000},
+ {"id":"b","agent":"lambda","model":"local-senior","prompt":"In one sentence, name the three boids rules.","context":[],"outputs":["coordination/fleet-b.md"],"timeoutMs":120000}
+]}
