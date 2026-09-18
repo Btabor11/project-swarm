@@ -197,3 +197,97 @@ lock and pool usage. The value observed here was that an independent lane
 found a second mutation path that could undo pause and a cross-helper resource
 risk. No sequential baseline, cost comparison, or delivery-speed measurement
 was collected, so this case makes no speedup claim.
+
+## Completion capacity and turn-budget follow-up
+
+CRM implementation and regression coverage:
+[cluer-crm-pipeline PR #62](https://github.com/Btabor11/cluer-crm-pipeline/pull/62),
+reviewed at `0cb087e32f2d6a12854ca24664f175ff132eca6f`.
+
+The next production observation exposed a different boundary: a manager could
+successfully delegate a task, spend its remaining turns reading, and fail
+before recording its own response. The CRM coordinator reported four manager
+eight-turn-limit failures in the observed history: one rehearsal and three
+live runs. A later parent retry completed, and two worker tasks had verified
+CRM evidence by the 03:05 UTC observation. These are counts from one observed
+state, not a controlled failure rate. A failed run did not imply that its
+successful child assignment had been rolled back.
+
+Three authorized native workers again had separate outputs alongside the
+coordinator: runner/prompt and focused budget checks; a bounded synthetic
+planning check and its controls; independent queue/receipt acceptance and
+evidence. Local database test windows were passed between lanes so fixture
+writers did not overlap. This was native host delegation; no toolkit CLI or
+API worker exchange is claimed for the CRM implementation.
+
+The first pass kept the existing eight-provider-turn and 24-tool-call caps,
+deadlines, daily budgets, and permissions. A shared helper describes the
+remaining capacity using those same enforced limits. The bundled manager
+prompt was versioned to v2: inspect current task status first, reuse an
+existing child on retry, batch independent reads, stop optional research,
+and leave time for a receipt and completion response. The waiting instruction
+inbox was not treated as a list of previously delegated children.
+
+The second pass bound independent acceptance to actual preparation,
+activation, mission discovery, bundled prompts, queue claims, runner, CRM
+tools, write receipts, and manager review. Only model transport was controlled.
+The acceptance deliberately used six reading turns, a successful assignment
+on turn seven, and an unnecessary read on turn eight. It still failed at the
+unchanged hard limit. Its child instruction and durable receipt remained.
+
+After an OFF/ON pause, the retry read its real persisted task status and reused
+the child rather than issuing another assignment. The parent completed its
+response in two controlled provider turns. The original child produced one
+task and one manager review, and all execution leases closed. Nineteen local
+acceptance checks passed, including preserved queue attempts while paused,
+one unchanged assignment receipt, unchanged daily budgets and permissions,
+and no customer email. The two-turn recovery belongs to that fixture; it
+does not predict every live retry's behavior.
+
+The third pass independently reviewed the completion guard and provider-test
+boundary. New delegation is absent from both the advertised and executable
+tools on the final provider turn of an assigned task. Review also required
+reserving a tool-call slot: assignment may use slot 23 and leave response
+slot 24, but assignment in slot 24 is refused, including within a multi-call
+provider response. The implementation's count convention is explicit: the
+guard receives calls consumed before the attempted call. This avoids an
+off-by-one disagreement between presentation and execution.
+
+The optional planning check sends a fixed synthetic lead and simulated tool
+results through the selected configured provider. Its tool contracts and
+projections were checked against the real CRM shapes. It executes no real
+CRM tool, reads no customer record, and creates no production fixture. The
+check is bounded to eight model calls and 110 seconds, with a short lease to
+prevent simultaneous probes; it can use provider credits. Its returned model,
+prompt version/checksum, turn/tool counts, reason, and pass/fail are evidence
+about that one synthetic planning handoff. They do not grant activation,
+replace the separate connection proof, or verify a customer's outcome.
+
+The coordinator subsequently reported that the CRM's full local `npm test`,
+`npm run verify` (including its token check), and production build passed.
+The final controlled planning-check suite passed 41 checks, alongside the
+independent 19-check acceptance. These local results do not establish a live
+served-model planning result. This study does not claim that a configured
+model completed a live evaluation, that all production turn-limit failures
+were eliminated, or that delivery speed improved. The deliberately inefficient
+controlled run still failed. The improvement established here is the explicit
+completion boundary, recovery using existing work, and regression coverage
+that distinguishes failed orchestration from committed effects.
+
+An independent worker then applied the guidance to a support-triage scenario
+with different limits: six provider turns and twelve tool calls. It required
+request-to-ticket identity, a defined write/receipt boundary, reserved
+acknowledgement capacity, and a retry that inspects and reuses the existing
+ticket. Its proposed checks included a committed ticket followed by a failed
+parent, assignment in call 11 followed by acknowledgement in call 12, refused
+last-slot delegation within a batch, concurrent retries, tenant isolation,
+and preservation of unrelated operator tickets. It identified unknown
+approval and transaction semantics before dispatch. This was a static
+transfer review, not execution or a blinded comparison: the reviewer had
+already read this study before receiving the fresh scenario.
+
+The skill update's preflight passed all 76 toolkit tests, the 53-file package
+check (including syntax and links), the skill-creator frontmatter validator,
+and `git diff --check`. Those checks establish packaging and existing toolkit
+regression coverage; the static review separately tests how the guidance is
+applied. Neither establishes a live-provider speed or reliability improvement.
