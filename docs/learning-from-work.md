@@ -26,7 +26,39 @@ A real repository stored credentials under `.secrets/`. Validation rejected `.en
 
 The fix rejects case-insensitive `.secrets` components at any depth in both arrays. A synthetic regression verifies rejection before a workspace is created or a worker starts. This narrows accidental credential copying; it does not scan file contents, sanitize inherited CLI environments, or establish OS-level containment. No live disclosure was observed or needed to prove the validator gap.
 
+## Example: cumulative load mistaken for current pressure
+
+A live performance investigation compared a high infrastructure summary with a
+shorter post-restart resource window and two timestamped query snapshots. The
+short window did not support sustained saturation, and the largest cumulative
+statement differed from the largest cost during the measured interval.
+
+For similar work, the lead owns target identity, counter-reset timestamps,
+measurement windows and read-only access. A bounded reviewer can trace the
+identified query shapes to callers while the lead collects the second snapshot.
+Compare deltas only across compatible counters without resets or evictions.
+Distinguish execution elapsed time from CPU, buffer reads from physical I/O,
+and quota warnings from resource saturation. Keep suspected causes and
+unverified deployed-client versions explicit. Do not reset counters or change
+production merely to make the diagnosis easier. This pattern improves evidence
+quality; this case did not measure a delivery-speed improvement.
+
 ## Keep the release coherent
+
+Honor the user's acceptance gates. For example, when a user requires at least
+three iteration passes and preflight, record separate scope/impact,
+behavior/failure, and final-integration reviews, with findings, corrections,
+checks, and remaining limits. Revisit affected passes after further changes.
+Do not manufacture changes on a clean pass or substitute three identical test
+runs. For a new regression guard, exercise the old failure in an isolated
+synthetic fixture and show that the guard goes red before accepting its green
+result against the fix.
+
+Preflight should cover the exact revision and diff, ownership/dependencies,
+privacy, required checks/CI, install and documentation consistency, applicable
+platform evidence, and authorized delivery/rollback boundaries. Keep missing
+verification explicit; a toolkit installation check is not a live-provider or
+customer-outcome check.
 
 For an authorized upstream contribution:
 
