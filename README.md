@@ -74,6 +74,8 @@ The skill is project-local and can be read explicitly. It is not automatically i
 
 You can keep one lead orchestrator as your point of contact. The lead supervises optional area managers and scoped workers, then owns review, integration, and final verification. Managers are useful for independent areas; small tasks do not need an extra management layer.
 
+Native-agent slots in the host and Project Swarm's external CLI/API workers have distinct concurrency controls. A host slot limit alone is not proof that no external capacity is available; verify the selected provider with the required smoke checks and launch only useful independent work. Report observed native/external activity separately. Provider usage and reported list-price cost do not establish remaining account quota or actual charges. See [capacity and usage boundaries](docs/orchestration.md#capacity-and-usage-boundaries).
+
 For ongoing use, follow [learning from real work](docs/learning-from-work.md): turn demonstrated failures and measured friction into narrow fixes, meaningful checks, and updated documentation. Keep private project evidence local, use sanitized reproductions upstream, and do not claim faster delivery without measurements. The guide includes credential-path and timestamped performance-investigation examples.
 
 User-required review passes and preflight gates remain approval requirements. Record distinct review evidence and recheck affected results after corrections; repeated identical test runs do not replace those passes.

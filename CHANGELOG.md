@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Clarify native-agent versus external-worker capacity, provider smoke evidence, combined activity reporting, and the distinction between completed-job usage, reported cost, account quota, and actual charges.
 - Reject `.secrets` components in context and output paths before workspace creation or worker launch; cover nested and mixed-case paths with synthetic regressions.
 - Document a single user-facing lead with optional area managers, explicit project-policy context, and an evidence-based improvement loop with synchronized documentation and scoped upstream authorization.
 - Add a sanitized performance-investigation example separating counter deltas, CPU measurements, and quota warnings.
