@@ -95,6 +95,10 @@ Each run uses these project-local locations:
 
 The exact prompt, model response, and provider events are local evidence, not material to publish automatically. Provider metadata may contain usage and actual model identifiers when the provider emits them. API records contain a normalized event, numeric usage, and model identifier rather than raw HTTP responses or headers. API cost is unavailable, not inferred. Missing metadata must be reported as unavailable, not inferred from a requested alias.
 
+Claude JSONL is parsed one event at a time before retention. In recognized image blocks, `source.data` (base64) and the Read result's `file.base64` become metadata objects with `omitted: "image-base64"`, encoding, encoded/decoded byte counts, and SHA-256 of the decoded bytes. Media type and other event fields remain. Images copied into the worker workspace are unchanged; transformed images returned by the CLI can have a different hash from the source file. The retained log is an inspection record, not a verbatim replay of the provider stream.
+
+The combined retained stdout/stderr limit remains 16 MiB. A separate 64 MiB raw-line limit bounds JSON parsing before image omission; exceeding either limit fails the job and blocks integration. Incomplete or malformed JSONL still fails. Ordinary text, tool errors, usage, final responses, and unknown payload shapes are not removed. These limits do not constrain the provider's own transcript storage, and image omission is not a general secret/PII filter. CLI activity byte counters measure retained bytes; a partially received JSONL line has not yet contributed stdout bytes.
+
 An overall successful run has `status: "complete"`; individual jobs may instead fail, time out, or be cancelled. For Claude, a zero subprocess exit code alone is insufficient: the runner requires a successful provider result event and rejects malformed output, missing results, and reported permission denials.
 
 ## Integration contract

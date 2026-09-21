@@ -109,6 +109,7 @@ flowchart LR
 - Claude reading jobs have Read/Glob/Grep; writing jobs also have Write/Edit. API jobs receive only copied UTF-8 text and return validated file contents; they have no tools. Shell, agent, browser integration, and MCP tools are disabled by the adapter.
 - Integration imports only declared files, rejects missing output/deletions, checks content and permission conflicts, and preserves existing executable bits.
 - Prompts, responses, provider logs, resolved model identifiers, usage, and reported cost remain in the local run directory.
+- Claude logs replace known base64 image payloads with byte counts and SHA-256 provenance; copied source images remain available for review. Retained stdout/stderr stays capped at 16 MiB, with a separate 64 MiB raw JSONL-line bound. This is not general content or secret redaction.
 - The coordinator handles follow-up rounds by explicitly passing earlier responses into a new assignment. Workers do not maintain a shared conversation or coordinate themselves.
 
 Copied workspaces and guarded integration are **not an operating-system security sandbox**. Read [the scope and threat model](SECURITY.md) before using sensitive source. Keep secrets out of worker context.

@@ -15,6 +15,9 @@ import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters
 
 const MAX_CONTEXT = 32 * 1024 * 1024;
 const MAX_FILE = 16 * 1024 * 1024;
+// A Claude Read event can contain two base64 copies of one permitted 16 MiB
+// image. Bound one raw JSONL event separately from the retained 16 MiB log.
+const MAX_CLAUDE_LINE = 64 * 1024 * 1024;
 const PROGRESS_INTERVAL = 1000;
 const CLI_AGENTS = ['claude', ...EXTRA_CLI_AGENTS];
 const API_PROGRESS_NOTE = 'Single-request API jobs return only when the request settles; incremental worker activity is not observable.';
@@ -196,14 +199,73 @@ export function activityRecorder(flush, intervalMs = PROGRESS_INTERVAL, onError 
   };
 }
 
+// Only known structured image payloads are replaced. Text, unknown shapes,
+// tool diagnostics, result metadata and ordinary strings stay intact.
+function redactClaudeImages(event) {
+  let changed = false;
+  const omit = (container, field) => {
+    const value = container[field];
+    if (typeof value !== 'string' || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return;
+    const bytes = Buffer.from(value, 'base64');
+    container[field] = { omitted: 'image-base64', encoding: 'base64', encodedBytes: value.length, decodedBytes: bytes.length, sha256: digest(bytes) };
+    changed = true;
+  };
+  const pending = [event];
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== 'object') continue;
+    if (value.type === 'image') {
+      if (value.source?.type === 'base64' && typeof value.source.media_type === 'string' && value.source.media_type.startsWith('image/')) omit(value.source, 'data');
+      if (typeof value.file?.type === 'string' && value.file.type.startsWith('image/')) omit(value.file, 'base64');
+    }
+    for (const child of Object.values(value)) if (child && typeof child === 'object') pending.push(child);
+  }
+  return changed;
+}
+
 async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killImpl, onOutput = () => {} }) {
   return new Promise(resolve => {
     let child, stdout = '', stderr = '', reason, settled = false, size = 0;
+    let lineParts = [], lineBytes = 0;
     let timeout, poll, termination;
     const stop = why => { if (reason || settled) return; reason = why; termination=stopChild(child,{killImpl}); termination.then(cleanup=>{if(cleanup.error)finish(null);}); };
+    const retain = (key, data) => {
+      const bytes = Buffer.byteLength(data);
+      if (size + bytes > MAX_FILE) { stop('Worker log exceeded 16 MiB'); return; }
+      size += bytes;
+      if (key === 'stdout') stdout += data; else stderr += data;
+      onOutput(key, bytes);
+    };
+    const finishLine = suffix => {
+      let line = lineParts.join('');
+      lineParts = []; lineBytes = 0;
+      let event;
+      try { event = JSON.parse(line); }
+      catch { /* Preserve malformed text for the existing fail-closed parser. */ }
+      if (event && redactClaudeImages(event)) line = JSON.stringify(event);
+      retain('stdout', line + suffix);
+    };
+    const collectClaude = data => {
+      let start = 0;
+      while (start < data.length && !reason && !settled) {
+        const newline = data.indexOf('\n', start);
+        const end = newline < 0 ? data.length : newline;
+        const part = data.slice(start, end);
+        const bytes = Buffer.byteLength(part);
+        if (lineBytes + bytes > MAX_CLAUDE_LINE) {
+          lineParts = []; lineBytes = 0;
+          stop('Worker JSONL line exceeded 64 MiB'); return;
+        }
+        lineParts.push(part); lineBytes += bytes;
+        if (newline >= 0) finishLine('\n');
+        start = end + 1;
+      }
+    };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
       if (settled) return;
+      if (job.agent === 'claude' && !reason && lineParts.length) finishLine('');
+      lineParts = []; lineBytes = 0;
       settled = true;
       clearTimeout(timeout); clearInterval(poll); signal?.removeEventListener('abort', onAbort);
       const cleanup=await(termination??stopChild(child,{killImpl}));
@@ -234,12 +296,9 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       });
       child.on('close', code => finish(code));
       for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']]) stream.setEncoding('utf8').on('data', data => {
-        const bytes = Buffer.byteLength(data);
-        size += bytes;
-        if (size > MAX_FILE) { stop('Worker log exceeded 16 MiB'); return; }
-        if (key === 'stdout') stdout += data.toString(); else stderr += data.toString();
-        // Counted after the 16 MiB check so telemetry matches the retained log exactly.
-        onOutput(key, bytes);
+        if (reason || settled) return;
+        if (job.agent === 'claude' && key === 'stdout') collectClaude(data);
+        else retain(key, data);
       });
       child.stdin.on('error', () => {});
       child.stdin.end(message);

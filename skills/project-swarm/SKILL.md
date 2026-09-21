@@ -46,6 +46,8 @@ Cancel with `node tools/swarm.mjs cancel <run-id>` or interrupt the active runne
 
 For a writing job, list its allowed output filenames. New nested output files are supported. API jobs must name a model available to the operator; Claude may use a named model when requested or verified. API-only `maxOutputTokens` defaults to 8192 and accepts 256–32768. Do not add executable paths, commands, environment overrides, or provider configuration to manifests; the runner rejects unknown job fields. Runner/model logs remain local and may contain copied source text. Do not publish them without reviewing their contents.
 
+Claude logs omit recognized base64 image payloads while preserving media type, byte counts, and SHA-256 provenance. Review images in the copied context; metadata alone does not prove visual inspection. Text, tool errors, usage, and results remain logged. Retained stdout/stderr is limited to 16 MiB and each raw JSONL line to 64 MiB; image omission is not a general privacy filter. See [saved records](references/manifest-reference.md#saved-records).
+
 ## Completion and reuse
 
 Run `node --test tests/*.test.mjs` to validate isolation checks, conflicts, result errors, timeout, cancellation, integration, and advisory preflight. For a first connection, perform one read-only and one small writing smoke exchange and inspect their responses before assigning substantial work. Integrate only the writing output you reviewed. Report which provider/model actually answered, what changed, checks run, and any limits.
