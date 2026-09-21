@@ -20,6 +20,7 @@ The unit tests must not require provider authentication, network access, or paid
 - Add focused regression tests for changed behavior, especially cancellation, malformed provider output, conflicts, file modes, or installation.
 - Update the skill, examples, and documentation when command behavior or guarantees change.
 - State what was actually tested, including operating system and provider versions for optional live checks.
+- For improvements discovered in product work, include a sanitized reproduction and preserve the distinction between observed results and expected gains. Follow [learning from real work](docs/learning-from-work.md); do not publish private project context or require an unrelated toolkit change after every task.
 
 For changes to the portable installer, test a fresh install, an identical repeated install, and refusal to overwrite differing existing files. For a new provider, follow [the adapter checklist](docs/extending.md) and do not advertise support before its restrictions and real smoke exchanges have been verified.
 

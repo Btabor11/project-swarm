@@ -27,7 +27,7 @@ function relative(value, internal = false) {
   if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\') || /[\x00-\x1f\x7f:]/.test(value)) fail(`Invalid relative path: ${value}`);
   const parts = value.split('/');
   if (parts.some(p => !p || p === '.' || p === '..')) fail(`Unsafe path: ${value}`);
-  if (!internal && parts.some(p => ['.git', '.swarm', '.env', '.ssh', '.aws', '.gnupg'].includes(p.toLowerCase()) || p.toLowerCase().startsWith('.env.'))) fail(`Reserved or secret path: ${value}`);
+  if (!internal && parts.some(p => ['.git', '.swarm', '.env', '.secrets', '.ssh', '.aws', '.gnupg'].includes(p.toLowerCase()) || p.toLowerCase().startsWith('.env.'))) fail(`Reserved or secret path: ${value}`);
   return parts;
 }
 

@@ -55,6 +55,22 @@ test('refuses symlink context and launches no workers', async t => {
   assert.match(state.error, /Symlink refused/);
 });
 
+test('refuses credential directories in context and outputs before copying or launching', async t => {
+  const root = await fixture(t);
+  for (const field of ['context', 'outputs']) {
+    for (const file of ['.secrets/synthetic.json', 'nested/.SECRETS/synthetic.json']) {
+      const input = manifest([job({ context: [], outputs: [], [field]: [file] })]);
+      assert.throws(() => validateManifest(input), /Reserved or secret path/);
+      let launched = false;
+      await assert.rejects(runManifest(root, input, {
+        spawnImpl() { launched = true; throw Error('Must not launch'); },
+      }), /Reserved or secret path/);
+      assert.equal(launched, false);
+      await assert.rejects(fs.access(path.join(root, '.swarm')), { code: 'ENOENT' });
+    }
+  }
+});
+
 test('rejects symlink parents both when copying and when integrating', async t => {
   const root = await fixture(t);
   await fs.mkdir(path.join(root, 'actual'));

@@ -6,6 +6,7 @@ Project Swarm is a coordinator for fresh Claude CLI and tool-free API jobs, copi
 
 - Manifests name explicit project-relative input and output files.
 - Path traversal, reserved paths, checked symlinks, duplicate writers, and invalid manifest fields are refused.
+- `.secrets` directory components are refused case-insensitively at any depth in both context and outputs, alongside `.env` paths. Existing output files are also copied into worker snapshots.
 - Each job runs in a separate copied workspace inside the selected project.
 - Claude receives file-reading tools and, for writing jobs, file-editing tools. Shell, delegation, and MCP tools are not enabled.
 - The runner starts fresh processes with session persistence disabled; it does not discover or attach to existing terminals.

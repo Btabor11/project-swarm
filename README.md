@@ -72,6 +72,10 @@ After installation, give the coordinator a prompt like:
 
 The skill is project-local and can be read explicitly. It is not automatically installed into a product's global skill-discovery directory. See [setup](docs/setup.md) for setup and sharing details.
 
+You can keep one lead orchestrator as your point of contact. The lead supervises optional area managers and scoped workers, then owns review, integration, and final verification. Managers are useful for independent areas; small tasks do not need an extra management layer.
+
+For ongoing use, follow [learning from real work](docs/learning-from-work.md): turn demonstrated failures and measured friction into narrow fixes, meaningful checks, and updated documentation. Keep private project evidence local, use sanitized reproductions upstream, and do not claim faster delivery without measurements.
+
 ## Ship smaller pieces
 
 Before dispatch, give every job one coherent deliverable, one owner for each output, and an observable acceptance check. Split a job when it crosses unrelated concerns or has distinct checks that can run independently. Agree on shared interfaces first; run dependent implementation in later batches after reviewed integration. More workers help only when they have independent work.
@@ -142,6 +146,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 
 - [Active orchestration and monitoring](docs/orchestration.md)
 - [Manager task contracts and staged delivery](docs/managed-feature-plan.md)
+- [Continuous improvement from real work](docs/learning-from-work.md)
 - [Providers, authentication, and API smoke tests](docs/providers.md)
 - [Setup and troubleshooting](docs/setup.md)
 - [Workflow recipes and coordinator prompts](docs/workflows.md)

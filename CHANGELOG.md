@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject `.secrets` components in context and output paths before workspace creation or worker launch; cover nested and mixed-case paths with synthetic regressions.
+- Document a single user-facing lead with optional area managers, explicit project-policy context, and an evidence-based improvement loop with synchronized documentation and scoped upstream authorization.
+
 - Check decoded API output strings for echoed provider keys before saving summaries, files, or metadata, including JSON-escaped echoes.
 - Give every Lambda request a fresh routing-session nonce, including repeated runs with the same job ID in one process.
 - Add preflight context breakdowns, snapshot-dependency warnings, and task-sizing advisories.
