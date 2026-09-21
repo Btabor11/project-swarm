@@ -30,6 +30,8 @@ node tools/swarm.mjs doctor lambda
 
 `doctor` without an argument checks Claude for backward compatibility. `doctor all` reports each provider independently. API `configured` means an environment credential is present, or an Ollama or Lambda origin you operate has been selected. `liveVerified: false` is deliberate: diagnostics do not contact endpoints or prove authentication, model access, server health, quota, or output-schema support. `run` checks only the providers its jobs actually select.
 
+Claude `--version` and `--help` write to private temporary files rather than pipes: a CLI that exits before flushing its pipe can otherwise appear to lack supported safety flags. Each diagnostic has a ten-second timeout. The subprocess uses an OS file-size limit of at most 1 MiB per file, and capture at or above 512 KiB is rejected conservatively to detect truncation across supported shell block sizes. Files are removed on success and failure; missing required flags still fail compatibility. This diagnostic capture does not apply to worker transcripts or prove provider authentication.
+
 Configure credentials using your normal secure environment/secret manager, outside the worker. Never put real keys in a manifest, command example committed to Git, prompt, or copied context. The runner does not read `.env` automatically. If you choose Node's environment-file feature, keep that file outside version control and never include it as context. API account access and billing are separate from cloning this public repository.
 
 For Claude installation, follow [Anthropic's setup guide](https://code.claude.com/docs/en/setup), authenticate through the CLI, and run the compatibility check. Required restrictions are never silently removed to support an older CLI.

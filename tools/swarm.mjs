@@ -5,6 +5,7 @@
 import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -524,6 +525,49 @@ export async function inspectRun(root,id){
   return {id,status:state.status,integratedAt:state.integratedAt??null,files};
 }
 
+// Some CLI builds exit before piped --help stdout finishes flushing. Real
+// diagnostics use files instead; shell file-size limits bound writes even
+// before Node can inspect the result. No shell interpolation of command/args.
+export async function captureCliDiagnostic(command, args, {timeout=10000, spawnImpl=spawn}={}) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-cli-diagnostic-'));
+  let output, errors;
+  try {
+    output = await fs.open(path.join(directory, 'stdout'), 'wx', 0o600);
+    errors = await fs.open(path.join(directory, 'stderr'), 'wx', 0o600);
+    await new Promise((resolve, reject) => {
+      let child, timer, settled = false, timedOut = false, termination;
+      const finish = async (code, signal, error) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        const cleanup = await (termination ?? stopChild(child));
+        if (cleanup.error) child?.unref();
+        if (cleanup.error || error || timedOut || code !== 0) reject(new Error(cleanup.error || error?.message || (timedOut ? 'CLI diagnostic timed out' : `CLI diagnostic exited ${signal || code}`)));
+        else resolve();
+      };
+      try {
+        // POSIX shells measure -f in 512-byte blocks; shells using 1024-byte
+        // blocks are also bounded to at most 1 MiB per file by this value.
+        child = spawnImpl('/bin/sh', ['-c', 'ulimit -f 1024 || exit 125; exec "$@"', 'swarm-cli-diagnostic', command, ...args], {shell:false, detached:true, stdio:['ignore', output.fd, errors.fd]});
+        child.once('error', error => finish(null, null, error));
+        child.once('close', (code, signal) => finish(code, signal));
+        timer = setTimeout(() => {
+          timedOut = true;
+          termination = stopChild(child);
+          termination.then(cleanup => { if (cleanup.error) finish(null); });
+        }, timeout);
+      } catch (error) { finish(null, null, error); }
+    });
+    const [outStat, errStat] = await Promise.all([output.stat(), errors.stat()]);
+    // Reject even a successful exit at the smaller POSIX limit: reaching a
+    // file-size limit may truncate output without a nonzero CLI exit status.
+    if (outStat.size >= 512*1024 || errStat.size >= 512*1024) fail('CLI diagnostic output reached 512 KiB limit');
+    return {stdout:await fs.readFile(path.join(directory, 'stdout'), 'utf8'), stderr:await fs.readFile(path.join(directory, 'stderr'), 'utf8')};
+  } finally {
+    await Promise.all([output?.close(), errors?.close()]);
+    await fs.rm(directory, {recursive:true, force:true});
+  }
+}
+
 export async function doctor({exec=execFileAsync, agent='claude', env=process.env}={}){
   const [major,minor]=process.versions.node.split('.').map(Number);
   if(major<20||(major===20&&minor<3))fail('Node 20.3 or newer is required');
@@ -531,8 +575,9 @@ export async function doctor({exec=execFileAsync, agent='claude', env=process.en
   if(EXTRA_CLI_AGENTS.includes(agent))return extraCliDoctor(agent,exec);
   if(agent!=='claude')return apiDoctor(agent,env);
   const options={timeout:10000,maxBuffer:1024*1024};
-  const version=await exec('claude',['--version'],options);
-  const help=await exec('claude',['--help'],options);
+  const capture = exec === execFileAsync ? captureCliDiagnostic : exec;
+  const version=await capture('claude',['--version'],options);
+  const help=await capture('claude',['--help'],options);
   const required=['--restricted','--safe-mode','--tools','--permission-prompts','--strict-mcp-config','--mcp-config','--no-session-persistence','--no-chrome','--output-format'];
   const missing=required.filter(flag=>!help.stdout.includes(flag));
   if(missing.length)fail(`Installed Claude CLI lacks required flags: ${missing.join(', ')}. Update Claude; restrictions will not be weakened.`);

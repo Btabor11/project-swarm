@@ -22,6 +22,8 @@ node tools/swarm.mjs doctor all
 
 There are no npm dependencies to install. Tests use fake local workers and mock HTTP responses; they make no model calls. `doctor all` reports local compatibility/configuration without testing authentication. Start with the Claude smoke below, or choose an API smoke from [provider setup](docs/providers.md):
 
+Claude's version/help diagnostics use private temporary files to avoid CLI pipe-flush truncation. Capture has a ten-second timeout and bounded file sizes; temporary files are removed on success or failure. Required safety flags are still checked in full.
+
 ```sh
 node tools/swarm.mjs preflight examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
