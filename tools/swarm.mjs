@@ -242,7 +242,13 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       let event;
       try { event = JSON.parse(line); }
       catch { /* Preserve malformed text for the existing fail-closed parser. */ }
-      if (event && redactClaudeImages(event)) line = JSON.stringify(event);
+      try {
+        if (event && redactClaudeImages(event)) line = JSON.stringify(event);
+      } catch {
+        // Valid but pathological metadata can exceed JSON.stringify's stack.
+        // Fail only this worker; never fall back to retaining raw image data.
+        stop('Worker log processing failed'); return;
+      }
       retain('stdout', line + suffix);
     };
     const collectClaude = data => {

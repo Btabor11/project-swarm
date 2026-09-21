@@ -93,3 +93,16 @@ test('a raw JSONL line without a newline has a separate bounded memory limit', a
   assert.match(state.jobs[0].error, /Worker JSONL line exceeded 64 MiB/);
   assert.equal(await transcript(root, state), '');
 });
+
+test('deep image metadata fails the worker without crashing the coordinator or retaining raw payloads', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest, { spawnImpl: fake(`
+    const image={type:'image',source:{type:'base64',media_type:'image/png',data:Buffer.from('synthetic deep image').toString('base64')}};
+    await emit('{"type":"user","deep":'+'{"nested":'.repeat(12000)+JSON.stringify(image)+'}'.repeat(12000)+'}\\n');
+    setInterval(()=>{},1000);
+  `) });
+  assert.equal(state.status, 'failed');
+  assert.equal(state.jobs[0].terminationReason, 'Worker log processing failed');
+  assert.equal(await transcript(root, state), '');
+  await assert.rejects(integrateRun(root, state.id), /Only a complete run/);
+});
