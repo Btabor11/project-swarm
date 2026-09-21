@@ -33,7 +33,7 @@ export function apiConfiguration(agent, env = process.env) {
     if (key && url.protocol !== 'https:' && !loopback) fail('Credentials require HTTPS');
   }
   if (key !== undefined && (typeof key !== 'string' || /[\r\n]/.test(key))) fail('Invalid credential format');
-  return { endpoint, key: key || null, keyName, configured: agent === 'ollama' || selfHosted || Boolean(key) };
+  return { endpoint, key: key || null, keyName, selfHosted, configured: agent === 'ollama' || selfHosted || Boolean(key) };
 }
 
 export function apiDoctor(agent, env = process.env) {
@@ -131,7 +131,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const limit = job.maxOutputTokens ?? 8192;
     if (job.agent === 'openai') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, instructions, input, store: false, stream: false, max_output_tokens: limit, tools: [], text: { format: { type: 'json_schema', name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'gemini') { headers['x-goog-api-key'] = config.key; url += `${encodeURIComponent(job.model)}:generateContent`; body = { systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: limit, candidateCount: 1 } }; }
-    else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
+    else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(config.selfHosted && env.SWARM_LAMBDA_THINKING !== 'on' ? { chat_template_kwargs: { enable_thinking: false } } : {}), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, format: schema, options: { num_predict: limit } }; }
     let response;
     try { response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: controller.signal }); }
