@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { preflightProject, PREFLIGHT_THRESHOLDS } from '../tools/preflight.mjs';
 
-const job = (id, fields = {}) => ({ id, agent: 'claude', prompt: 'Implement the stated behavior and report its acceptance check.', context: [], outputs: [], ...fields });
+const job = (id, fields = {}) => ({ id, agent: 'claude', model: 'sonnet', prompt: 'Implement the stated behavior and report its acceptance check.', context: [], outputs: [], ...fields });
 const manifest = (...jobs) => ({ version: 1, concurrency: 2, jobs });
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-preflight-'));

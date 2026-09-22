@@ -29,7 +29,7 @@ async function waitFor(check, attempts = 300, delay = 20) {
   throw new Error('Condition was never observed');
 }
 
-const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', prompt: 'Work on the copied file.', context: ['input.txt'], outputs: [], timeoutMs: 20000, ...overrides });
+const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', model: 'test-model', prompt: 'Work on the copied file.', context: ['input.txt'], outputs: [], timeoutMs: 20000, ...overrides });
 const manifest = jobs => ({ version: 1, concurrency: 2, jobs });
 // Only tests inject a provider; production still spawns the literal CLI command.
 const fake = script => (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs';\n${script}`], options);

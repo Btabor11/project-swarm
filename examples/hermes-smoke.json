@@ -5,6 +5,7 @@
     {
       "id": "hermes-smoke",
       "agent": "hermes",
+      "model": "set-your-hermes-model",
       "prompt": "Return one sentence acknowledging this bounded communication test, and write the same sentence into the declared output. Use no tools.",
       "context": [],
       "outputs": [

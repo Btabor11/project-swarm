@@ -7,7 +7,7 @@ description: Coordinate fresh Claude CLI or tool-free API workers on bounded tas
 
 Use the coordinator for product decisions, task boundaries, integration, and final validation. Delegate independent, concrete work to fresh CLI processes or bounded API requests. Never discover, attach to, message, or terminate existing terminals or unrelated agents. This skill does not grant broader filesystem, network, billing, or sandbox permissions.
 
-Seven adapters are available: `claude`, `hermes`, `qwen`, `openai`, `gemini`, `ollama`, and `lambda`. API jobs require an explicit model and accept UTF-8 text only; they have no tools and return complete declared file contents as validated JSON. CLI adapters may omit `model` to use their configured default. Hermes/Qwen receive serialized text and strict file envelopes rather than edit tools; see the provider guide for required restrictions. A model string is not proof of availability. API adapters have deterministic contract tests; do not claim live verification without an actual successful exchange. A CLI worker does not open a visible terminal window.
+Seven adapters are available: `claude`, `hermes`, `qwen`, `openai`, `gemini`, `ollama`, and `lambda`. Every job, CLI or API, requires an explicit `model`; the runner never falls back to a CLI default (for Claude, that default is the user's own, often most expensive, configured model). API jobs accept UTF-8 text only; they have no tools and return complete declared file contents as validated JSON. Hermes/Qwen receive serialized text and strict file envelopes rather than edit tools; see the provider guide for required restrictions. A model string is not proof of availability. API adapters have deterministic contract tests; do not claim live verification without an actual successful exchange. A CLI worker does not open a visible terminal window.
 
 ## Prerequisites and scope
 
@@ -34,6 +34,7 @@ Cancel with `node tools/swarm.mjs cancel <run-id>` or interrupt the active runne
   "jobs": [{
     "id": "focused-review",
     "agent": "claude",
+    "model": "sonnet",
     "prompt": "Review the copied file for concrete usability problems. Return findings; do not edit.",
     "context": ["index.html"],
     "outputs": [],
@@ -42,7 +43,7 @@ Cancel with `node tools/swarm.mjs cancel <run-id>` or interrupt the active runne
 }
 ```
 
-For a writing job, list its allowed output filenames. New nested output files are supported. API jobs must name a model available to the operator; Claude may use a named model when requested or verified. API-only `maxOutputTokens` defaults to 8192 and accepts 256–32768. Do not add executable paths, commands, environment overrides, or provider configuration to manifests; the runner rejects unknown job fields. Runner/model logs remain local and may contain copied source text. Do not publish them without reviewing their contents.
+For a writing job, list its allowed output filenames. New nested output files are supported. Every job must name a model available to the operator; there is no default, so pick one deliberately for every job. API-only `maxOutputTokens` defaults to 8192 and accepts 256–32768. Do not add executable paths, commands, environment overrides, or provider configuration to manifests; the runner rejects unknown job fields. Runner/model logs remain local and may contain copied source text. Do not publish them without reviewing their contents.
 
 ### Choosing a tier, not gut feel
 

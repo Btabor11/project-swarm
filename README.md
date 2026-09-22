@@ -123,7 +123,7 @@ Copied workspaces and guarded integration are **not an operating-system security
 }
 ```
 
-Replace paths with files that exist in your project. An empty `outputs` array makes a reading-only job. CLI jobs may omit `model` to preserve the installed CLI default; API jobs require an explicit model. Model aliases resolve through your provider and may change; run records capture the actual model identifier when returned.
+Replace paths with files that exist in your project. An empty `outputs` array makes a reading-only job. Every job, CLI or API, requires an explicit `model`; the runner never falls back to a CLI default. Model aliases resolve through your provider and may change; run records capture the actual model identifier when returned.
 
 ## Commands
 

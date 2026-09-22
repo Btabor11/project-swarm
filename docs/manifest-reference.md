@@ -34,7 +34,7 @@ Unknown top-level fields are rejected.
 
 - `id`: required unique string, 1–80 characters. The first character is an ASCII letter or digit; remaining characters may also include `_` and `-`.
 - `agent`: required: `"claude"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, or `"lambda"`.
-- `model`: model identifier or alias. Optional for CLI jobs; required for API jobs. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Syntax validation does not prove provider availability.
+- `model`: required non-empty model identifier or alias, for every job on every agent. The runner never falls back to a CLI default — for Claude, that default is the user's own, often most expensive, configured model — so an omitted `model` is refused before any worker starts. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Syntax validation does not prove provider availability.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
 - `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for the worker to read.
 - `outputs`: required array of explicit relative file paths, at most 100 entries. Existing files are copied automatically; new files may be created. An empty array creates a read-only job.

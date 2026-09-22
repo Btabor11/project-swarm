@@ -81,7 +81,7 @@ Provider behavior, models, and account access can change. Keep compatibility che
 
 ## Hermes and Qwen Code installation and compatibility
 
-Use the upstream installation steps for [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation/) or [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/). Qwen's official npm package is `@qwen-code/qwen-code`; install it with your preferred project-local package setup and expose its `qwen` binary on PATH for the coordinator. Hermes requires its own upstream Python environment and `hermes` entrypoint. This toolkit does not modify global shell profiles, install gateways, or authenticate accounts automatically.
+Use the upstream installation steps for [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation/) or [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/). Qwen's official npm package is `@qwen-code/qwen-code`; install it with your preferred project-local package setup and expose its `qwen` binary on PATH for the coordinator. Hermes requires its own upstream Python environment and `hermes` entrypoint. This toolkit does not modify global shell profiles, install gateways, or authenticate accounts automatically. Every job needs an explicit `model` field; replace the placeholder in the example (e.g., `set-your-hermes-model`) with a model your Hermes or Qwen account serves before running it.
 
 ```sh
 node tools/swarm.mjs doctor hermes
