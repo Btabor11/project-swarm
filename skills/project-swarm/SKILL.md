@@ -44,6 +44,16 @@ Cancel with `node tools/swarm.mjs cancel <run-id>` or interrupt the active runne
 
 For a writing job, list its allowed output filenames. New nested output files are supported. API jobs must name a model available to the operator; Claude may use a named model when requested or verified. API-only `maxOutputTokens` defaults to 8192 and accepts 256–32768. Do not add executable paths, commands, environment overrides, or provider configuration to manifests; the runner rejects unknown job fields. Runner/model logs remain local and may contain copied source text. Do not publish them without reviewing their contents.
 
+### Choosing a tier, not gut feel
+
+Set each job's optional `tier` (`cheap` | `mid` | `expensive`) before dispatch; mark `expensive` with a short, non-empty `tierReason`. This is validated metadata shown back in `preflight`/`inspect`, not a model lookup: it never picks a model for you, and an explicit `model` always wins over `tier`. Keep the wording short and plain.
+
+- `cheap`: manifests, summaries, PR bodies, bookkeeping.
+- `mid`: code and tests against a clear written contract. Default for ordinary implementation.
+- `expensive`, with `tierReason` naming which of these applies: login/tokens/secrets or another security boundary; concurrency/async/event loops or anything running at the same time as other code; a contract between two repos or a public API/file format; or a step a `mid` worker already failed twice (escalate that one job one tier and record the two failures in `tierReason`).
+
+A design choice that is not already in the plan is never a reason to escalate tier. Stop and ask the human. The runner has no retry/re-dispatch path; the escalate-after-two-failures rule is something the coordinator does by hand — dispatch a fresh job with `tier: "expensive"` — not something the runner automates. Full checklist: [active orchestration](references/orchestration.md).
+
 ## Completion and reuse
 
 Run `node --test tests/*.test.mjs` to validate isolation checks, conflicts, result errors, timeout, cancellation, integration, and advisory preflight. For a first connection, perform one read-only and one small writing smoke exchange and inspect their responses before assigning substantial work. Integrate only the writing output you reviewed. Report which provider/model actually answered, what changed, checks run, and any limits.

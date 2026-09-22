@@ -31,7 +31,10 @@ export async function preflightProject(root, manifest) {
       message: 'Review the largest copied files and provide only context needed for the acceptance check. Size is a review signal, not proof that the task is too large.',
     });
     return {
-      id: job.id, outputCount: job.outputs.length, contextBytes: checked.contextBytes,
+      // tier/tierReason are validated routing metadata for the coordinator; they are
+      // advisory only here and never change which model or provider actually runs.
+      id: job.id, agent: job.agent, model: job.model ?? null, tier: job.tier ?? null, tierReason: job.tierReason ?? null,
+      outputCount: job.outputs.length, contextBytes: checked.contextBytes,
       files, largestContexts: files.filter(file => file.exists).sort((a, b) => b.bytes - a.bytes || byPath(a, b)).slice(0, 5),
     };
   });

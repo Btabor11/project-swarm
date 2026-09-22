@@ -27,6 +27,22 @@ The monitor is a single snapshot rather than a blocking watch loop. Poll at usef
 
 CLI job progress includes observed stdout/stderr byte counts, first and last output timestamps, a sampled activity timestamp, and elapsed time without observed output (`silentMs`). These are output observations, not a heartbeat, semantic progress measure, or proof that a silent worker is stalled. Single-request API jobs mark incremental activity unobservable; older records without progress remain unknown. Do not invent timestamps for either case.
 
+## Choosing a tier
+
+One genuinely hard design problem, named in advance, goes to the expensive model. This section names it. Set each job's `tier` (`cheap` | `mid` | `expensive`) before dispatch and write a short `tierReason` for anything `expensive`; both are validated metadata (see [the manifest reference](manifest-reference.md)) and are shown back to you in `preflight` and `inspect`. Setting `tier` never selects a model by itself: put the model you actually want in `model`. Keep the wording short and plain.
+
+- **`cheap`** — manifests, summaries, PR bodies, bookkeeping. Low stakes, easy to review, cheap to redo.
+- **`mid`** — code and tests against a clear written contract. The default for ordinary implementation work once interfaces are settled.
+- **`expensive`** — mark the task `expensive`, with a one-line `tierReason`, when it touches any of:
+  - login, tokens, secrets, or another security boundary;
+  - concurrency, async, event loops, or anything that runs at the same time as other code;
+  - a contract between two repos, or a public API or file format;
+  - a step a `mid`-tier worker already failed twice — escalate that one job one tier and record why in `tierReason` (for example: `"mid worker failed twice on the token-refresh race; escalating"`).
+
+A design choice that is not already in the plan is not a reason to reach for a more expensive model. Stop and ask the human instead; no tier setting substitutes for that decision.
+
+The runner has no retry/re-dispatch path today — every job in a manifest runs exactly once. The failed-twice escalation above is therefore a coordinator rule, not something the runner enforces: after a `mid` job's second failed attempt, the coordinator writes a fresh job with `tier: "expensive"` and a `tierReason` explaining the two failures, rather than dispatching a third `mid` attempt at the same task.
+
 ## Decompose before adding workers
 
 A job that changes token refresh, persistence, revocation, runner behavior, scheduled work, archival, status, and their tests contains several concerns. First identify the stable interfaces and ownership boundaries. For example, settle a canonical account-access contract, then dispatch disjoint runtime callers and status presentation in parallel against that contract. Keep edits to a shared storage file with one writer; making several workers touch that file would create a merge bottleneck. Each job should state the behavior to deliver, files it owns, the acceptance check the coordinator will execute, and what must be true of its inputs.
@@ -49,6 +65,7 @@ See the [managed feature recipe](managed-feature-plan.md) for task contracts, ow
 - Repeated context across jobs, including copied existing outputs. Repetition may be needed for correctness; the report does not label those bytes wasted or estimate model tokens.
 - Cross-job output-to-context references. Every job sees the pre-run snapshot, even at concurrency one. An exact stable contract can make parallel work valid; otherwise integrate the writer and create a fresh reader run.
 - Advisory scope flags above five output files or 160 KiB of copied context. These heuristics ask for review; they neither reject a valid coherent job nor prove that a prompt contains multiple concerns. The coordinator must inspect the task's actual responsibilities.
+- Each job's declared `agent`, `model`, `tier`, and `tierReason` (`null` when unset), so a tier decision is reviewable before dispatch instead of assumed. See "Choosing a tier" above.
 
 The report is deterministic for unchanged inputs. It contains file paths and byte counts, but no source contents or prompts. It does not automatically split tasks, start workers, guarantee snapshot stability after the check, or predict speedup. The runner revalidates when execution starts.
 

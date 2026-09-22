@@ -17,6 +17,7 @@ const MAX_CONTEXT = 32 * 1024 * 1024;
 const MAX_FILE = 16 * 1024 * 1024;
 const PROGRESS_INTERVAL = 1000;
 const CLI_AGENTS = ['claude', ...EXTRA_CLI_AGENTS];
+export const TIERS = ['cheap', 'mid', 'expensive'];
 const API_PROGRESS_NOTE = 'Single-request API jobs return only when the request settles; incremental worker activity is not observable.';
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -93,6 +94,11 @@ export function validateManifest(manifest) {
     if (API_AGENTS.includes(job.agent) && !job.model) fail('API jobs require an explicit model');
     if (job.maxOutputTokens !== undefined && (!API_AGENTS.includes(job.agent) || !Number.isInteger(job.maxOutputTokens) || job.maxOutputTokens < 256 || job.maxOutputTokens > 32768)) fail('maxOutputTokens is API-only and must be 256–32768');
     if (job.model !== undefined && (typeof job.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/.test(job.model))) fail('Invalid explicit model name');
+    // tier is advisory routing metadata for the coordinator, not a model selector: an explicit
+    // job.model always wins. expensive must name why, so the choice is inspectable, not gut feel.
+    if (job.tier !== undefined && !TIERS.includes(job.tier)) fail(`Unknown tier: ${job.tier}`);
+    if (job.tierReason !== undefined && (typeof job.tierReason !== 'string' || job.tierReason.length > 2000)) fail('Invalid tierReason');
+    if (job.tier === 'expensive' && !job.tierReason?.trim()) fail(`expensive tier requires a non-empty tierReason: ${job.id}`);
     if (typeof job.prompt !== 'string' || !job.prompt.trim() || job.prompt.length > 100000) fail(`Invalid prompt: ${job.id}`);
     if (!Array.isArray(job.context) || !Array.isArray(job.outputs) || job.context.length > 100 || job.outputs.length > 100) fail('context and outputs must be explicit arrays of at most 100 files');
     if (new Set(job.context).size !== job.context.length || new Set(job.outputs).size !== job.outputs.length) fail('Duplicate file path');
@@ -103,7 +109,7 @@ export function validateManifest(manifest) {
     }
     if (job.timeoutMs !== undefined && (!Number.isInteger(job.timeoutMs) || job.timeoutMs < 50 || job.timeoutMs > 3600000)) fail('timeoutMs must be 50–3600000');
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   for (const a of writers) for (const b of writers) if (a !== b && b.startsWith(`${a}/`)) fail(`Overlapping output paths: ${a}, ${b}`);
   return manifest;
@@ -435,7 +441,7 @@ export async function validateProject(root, manifest) {
       if(data !== null && job.agent !== 'claude') decodeContext(data);
       if(bytes>MAX_CONTEXT) fail(`Context exceeds 32 MiB for ${job.id}`);
     }
-    jobs.push({id:job.id,contextBytes:bytes,outputs:job.outputs,files});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files});
   }
   return {status:'valid',root,jobs};
 }
@@ -445,8 +451,11 @@ export async function inspectRun(root,id){
   if(state.root!==root||state.id!==id) fail('Run belongs to another repository');
   const manifest=validateManifest(JSON.parse(await bytesAt(root,`.swarm/runs/${id}/manifest.json`,true)));
   const files=[];
+  const jobs=[];
   for(const job of manifest.jobs){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
+    // tier/tierReason are validated metadata only; they never change which model ran.
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
@@ -456,7 +465,7 @@ export async function inspectRun(root,id){
       files.push({job:job.id,jobStatus:record.status,path:file,baseHash:record.baseHashes[file],currentHash,proposedHash,bytes:proposed?.length??0,status:record.status!=='complete'?'blocked':proposed===null?'missing':state.integratedAt&&currentHash===proposedHash?'applied':conflict?'conflict':currentHash===proposedHash?'unchanged':'ready'});
     }
   }
-  return {id,status:state.status,integratedAt:state.integratedAt??null,files};
+  return {id,status:state.status,integratedAt:state.integratedAt??null,jobs,files};
 }
 
 export async function doctor({exec=execFileAsync, agent='claude', env=process.env}={}){

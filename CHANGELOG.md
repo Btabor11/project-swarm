@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add an optional per-job `tier` (`cheap`/`mid`/`expensive`) and `tierReason` manifest field so model routing is a written, reviewable decision instead of gut feel. `expensive` requires a non-empty `tierReason`; an explicit `model` always wins over `tier`; a manifest with no `tier` behaves exactly as before. `tier` is validated metadata, surfaced in `preflight` and `inspect` output, and does not itself select a model. Document the routing checklist (security/concurrency/cross-repo boundaries, or a mid-tier failure escalated once with its reason) in the skill and orchestration guide; the failed-twice escalation is a coordinator rule, since the runner has no retry/re-dispatch path to hook it into.
 - Check decoded API output strings for echoed provider keys before saving summaries, files, or metadata, including JSON-escaped echoes.
 - Give every Lambda request a fresh routing-session nonce, including repeated runs with the same job ID in one process.
 - Add preflight context breakdowns, snapshot-dependency warnings, and task-sizing advisories.
