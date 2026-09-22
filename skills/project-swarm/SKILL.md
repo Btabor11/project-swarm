@@ -48,11 +48,13 @@ For a writing job, list its allowed output filenames. New nested output files ar
 
 Set each job's optional `tier` (`cheap` | `mid` | `expensive`) before dispatch; mark `expensive` with a short, non-empty `tierReason`. This is validated metadata shown back in `preflight`/`inspect`, not a model lookup: it never picks a model for you, and an explicit `model` always wins over `tier`. Keep the wording short and plain.
 
-- `cheap`: manifests, summaries, PR bodies, bookkeeping.
-- `mid`: code and tests against a clear written contract. Default for ordinary implementation.
-- `expensive`, with `tierReason` naming which of these applies: login/tokens/secrets or another security boundary; concurrency/async/event loops or anything running at the same time as other code; a contract between two repos or a public API/file format; or a step a `mid` worker already failed twice (escalate that one job one tier and record the two failures in `tierReason`).
+Route by difficulty, not topic. Auth, async and similar topics are not triggers by themselves.
 
-A design choice that is not already in the plan is never a reason to escalate tier. Stop and ask the human. The runner has no retry/re-dispatch path; the escalate-after-two-failures rule is something the coordinator does by hand — dispatch a fresh job with `tier: "expensive"` — not something the runner automates. Full checklist: [active orchestration](references/orchestration.md).
+- `cheap`: small follow-ups, PR bodies, summaries, manifests, bookkeeping. Always cheap, whatever the topic.
+- `mid`: code and tests against a clear written contract. Default for ordinary implementation.
+- `expensive`: genuinely hard work—a new design with no clear contract, or tricky reasoning a mid-tier worker would likely get wrong—or a step a mid-tier worker already failed twice (escalate that one job one tier and record why in `tierReason`).
+
+A design choice that is not already in the plan is never a reason to escalate tier. Stop and ask the human. The runner has no retry/re-dispatch path; the escalate-after-two-failures rule is something the coordinator does by hand — dispatch a fresh job with `tier: "expensive"` — not something the runner automates. Full routing guidance: [active orchestration](references/orchestration.md).
 
 ## Completion and reuse
 
