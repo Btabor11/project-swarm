@@ -68,6 +68,8 @@ node tools/swarm.mjs validate examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
 node tools/swarm.mjs status <run-id>
 node tools/swarm.mjs monitor <run-id>
+node tools/swarm.mjs monitor <run-id> --view
+node tools/swarm.mjs monitor <run-id> --view --watch 5
 node tools/swarm.mjs inspect <run-id>
 node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs cancel <run-id>
@@ -110,6 +112,8 @@ An integration lock serializes integrations through this runner. Individual file
 API jobs additionally require a complete, non-refused response and valid JSON with exactly `summary` and `files`. Each file contains only `path` and complete `content`; every declared output must occur exactly once. Responses are capped at 16 MiB, redirects are refused, and partial/truncated output is never integrated. Provider credentials/endpoints cannot appear as manifest configuration. See [provider setup](providers.md).
 
 The `monitor` command is a single read-only snapshot, suitable for periodic coordinator polling. New runs record `queuedAt`, `startedAt`, `finishedAt`, `durationMs`, configured concurrency, and observed peak active jobs. Counts reflect recorded queue state, not proof that stale processes survived a coordinator crash. Numeric usage is grouped by provider without combining incompatible token fields or estimating missing costs. Older run records remain readable; unavailable historical timings remain null.
+
+`monitor <run-id>` still prints the JSON snapshot above by default; nothing about that output changed. Add `--view` for a human table instead: one row per job (`id`, `agent`, `model`, `tier`, `status`, elapsed/duration, declared output count), a summary line (running/done/failed/queued counts, total elapsed, peak concurrency), and, where recorded, usage per provider. Every status shows a symbol and a word together, never color alone, and color is used only on a TTY with `NO_COLOR` unset. Add `--watch [seconds]` (default 2) to keep `--view` re-rendering in place until the run reaches a terminal status or you press Ctrl+C; it only reads saved state and never starts, cancels, or integrates anything.
 
 ## Advisory preflight
 

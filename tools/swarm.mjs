@@ -483,14 +483,77 @@ export async function doctor({exec=execFileAsync, agent='claude', env=process.en
   return {status:'compatible',node:process.versions.node,claude:version.stdout.trim(),auth:'not checked; use a live smoke job',liveVerified:false,platform:process.platform};
 }
 
+// Merges summarizeRun's snapshot with the fields it omits (agent/model/tier/tierReason,
+// declared output count) so `monitor --view` can render a full row without changing the
+// existing machine-readable monitor payload at all.
+async function monitorView(root, id) {
+  // Loaded lazily, like preflight.mjs above: an installed checkout that predates this
+  // module must keep running every other command with no missing-file import failure.
+  const { renderMonitorView, supportsColor } = await import('./monitor-view.mjs');
+  const state = await readState(root, id);
+  const summary = summarizeRun(state);
+  const manifestBytes = await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true);
+  const manifestJobs = manifestBytes ? JSON.parse(manifestBytes).jobs : [];
+  const tierById = new Map(manifestJobs.map(job => [job.id, { tier: job.tier ?? null, tierReason: job.tierReason ?? null }]));
+  const jobs = summary.jobs.map((job, index) => {
+    const record = state.jobs[index];
+    const { tier, tierReason } = tierById.get(job.id) ?? { tier: null, tierReason: null };
+    return { ...job, agent: record.agent, model: record.model ?? null, tier, tierReason, outputCount: record.outputs?.length ?? 0 };
+  });
+  return { status: summary.status, text: renderMonitorView({ ...summary, jobs }, { width: process.stdout.columns || 100, color: supportsColor() }) };
+}
+
 async function main() {
   const args=process.argv.slice(2);let root=path.join(path.dirname(fileURLToPath(import.meta.url)),'..');
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
   const [command,argument,...rest]=args;
-  if(command==='--help'||command==='help'||!command){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN | inspect RUN | integrate RUN | cancel RUN\n');return;}
+  if(command==='--help'||command==='help'||!command){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | inspect RUN | integrate RUN | cancel RUN\n');return;}
+  // monitor keeps its JSON snapshot as the default; --view/--watch are read-only human rendering
+  // extras consumed here so the generic argument-count check below still fails on anything else.
+  let view=false,watchSeconds=null;
+  if(command==='monitor'){
+    const flags=rest.splice(0,rest.length);
+    for(let index=0;index<flags.length;index++){
+      if(flags[index]==='--view'){view=true;continue;}
+      if(flags[index]==='--watch'){
+        view=true;watchSeconds=2;
+        const next=flags[index+1];
+        if(next!==undefined&&/^\d+(\.\d+)?$/.test(next)){watchSeconds=Number(next);index++;}
+        continue;
+      }
+      rest.push(flags[index]);
+    }
+    if(watchSeconds!==null&&(watchSeconds<=0))fail('--watch requires a positive number of seconds');
+  }
   if(rest.length||!['doctor','validate','preflight','run','status','monitor','inspect','integrate','cancel'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
   root=await fs.realpath(root);let result;
+  if(command==='monitor'&&view){
+    let status='running';
+    const isTty=Boolean(process.stdout.isTTY);
+    if(watchSeconds){
+      const controller=new AbortController();
+      const onSigint=()=>controller.abort();
+      process.on('SIGINT',onSigint);
+      try{
+        while(!controller.signal.aborted){
+          ({status,text:result}=await monitorView(root,argument));
+          if(isTty)process.stdout.write('\u001b[2J\u001b[H');
+          process.stdout.write(`${result}\n`);
+          if(['complete','failed','cancelled'].includes(status))break;
+          await new Promise(resolve=>{
+            const timer=setTimeout(resolve,watchSeconds*1000);
+            controller.signal.addEventListener('abort',()=>{clearTimeout(timer);resolve();},{once:true});
+          });
+        }
+      }finally{process.off('SIGINT',onSigint);}
+    }else{
+      ({status,text:result}=await monitorView(root,argument));
+      process.stdout.write(`${result}\n`);
+    }
+    if(['failed','cancelled'].includes(status))process.exitCode=1;
+    return;
+  }
   if(command==='doctor'){
     if(argument==='all'){
       const providers=[];

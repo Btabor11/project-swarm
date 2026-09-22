@@ -132,7 +132,17 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange.
 - `status <run-id>` — read progress, errors, and model metadata.
-- `monitor <run-id>` — concise snapshot of queued/running/completed jobs, observed peak concurrency, timings, numeric usage, and content-free CLI output counters. Silence is not proof that a worker is stuck.
+- `monitor <run-id>` — concise snapshot of queued/running/completed jobs, observed peak concurrency, timings, numeric usage, and content-free CLI output counters. Silence is not proof that a worker is stuck. Add `--view` for a human-readable table instead of JSON, and `--watch [seconds]` to keep it redrawing in place (read-only) until the run finishes:
+
+  ```sh
+  node tools/swarm.mjs monitor <run-id> --view --watch 5
+  # Run a1b2c3-9f8e — running
+  # 1 running · 2 done · 0 failed · 1 queued  ·  elapsed 38s  ·  peak concurrency 2
+  #
+  # JOB             AGENT   MODEL   TIER  STATUS     TIME  OUT
+  # render-review   claude  sonnet  mid   + done      12s    1
+  # scroll-anim     claude  -       -     > running    9s    1
+  ```
 - `inspect <run-id>` — inspect proposed outputs and conflicts without importing.
 - `integrate <run-id>` — import reviewed, declared outputs from a successful run.
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
