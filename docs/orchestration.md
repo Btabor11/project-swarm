@@ -29,19 +29,15 @@ CLI job progress includes observed stdout/stderr byte counts, first and last out
 
 ## Choosing a tier
 
-One genuinely hard design problem, named in advance, goes to the expensive model. This section names it. Set each job's `tier` (`cheap` | `mid` | `expensive`) before dispatch and write a short `tierReason` for anything `expensive`; both are validated metadata (see [the manifest reference](manifest-reference.md)) and are shown back to you in `preflight` and `inspect`. Setting `tier` never selects a model by itself: put the model you actually want in `model`. Keep the wording short and plain.
+Set each job's `tier` (`cheap` | `mid` | `expensive`) before dispatch and write a short `tierReason` for anything `expensive`; both are validated metadata (see [the manifest reference](manifest-reference.md)) and are shown back to you in `preflight` and `inspect`. Setting `tier` never selects a model by itself: put the model you actually want in `model`. Route by difficulty, not topic. Keep the wording short and plain.
 
-- **`cheap`** — manifests, summaries, PR bodies, bookkeeping. Low stakes, easy to review, cheap to redo.
-- **`mid`** — code and tests against a clear written contract. The default for ordinary implementation work once interfaces are settled.
-- **`expensive`** — mark the task `expensive`, with a one-line `tierReason`, when it touches any of:
-  - login, tokens, secrets, or another security boundary;
-  - concurrency, async, event loops, or anything that runs at the same time as other code;
-  - a contract between two repos, or a public API or file format;
-  - a step a `mid`-tier worker already failed twice — escalate that one job one tier and record why in `tierReason` (for example: `"mid worker failed twice on the token-refresh race; escalating"`).
+- **`cheap`** — small follow-ups, PR bodies, summaries, manifests, bookkeeping. Always cheap, whatever the topic.
+- **`mid`** — code and tests against a clear written contract. The default for ordinary implementation work.
+- **`expensive`** — genuinely hard work: a new design with no clear contract, or tricky reasoning a mid-tier worker would likely get wrong. Or, a step a `mid`-tier worker already failed twice—escalate that one job one tier and record why in `tierReason` (for example: `"mid worker failed twice on token-refresh race; escalating"`).
 
-A design choice that is not already in the plan is not a reason to reach for a more expensive model. Stop and ask the human instead; no tier setting substitutes for that decision.
+Auth, async and similar topics are not triggers by themselves. A design choice that is not already in the plan is not a reason to reach for a more expensive model. Stop and ask the human instead; no tier setting substitutes for that decision.
 
-The runner has no retry/re-dispatch path today — every job in a manifest runs exactly once. The failed-twice escalation above is therefore a coordinator rule, not something the runner enforces: after a `mid` job's second failed attempt, the coordinator writes a fresh job with `tier: "expensive"` and a `tierReason` explaining the two failures, rather than dispatching a third `mid` attempt at the same task.
+The runner has no retry/re-dispatch path today — every job in a manifest runs exactly once. The escalate-after-two-failures rule is therefore a coordinator rule, not something the runner enforces: after a `mid` job's second failed attempt, the coordinator writes a fresh job with `tier: "expensive"` and a `tierReason` explaining the two failures, rather than dispatching a third `mid` attempt at the same task.
 
 ## Decompose before adding workers
 
