@@ -5,6 +5,7 @@
     {
       "id": "qwen-smoke",
       "agent": "qwen",
+      "model": "set-your-qwen-model",
       "prompt": "Return one sentence acknowledging this bounded communication test, and write the same sentence into the declared output. Use no tools.",
       "context": [],
       "outputs": [

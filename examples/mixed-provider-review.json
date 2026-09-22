@@ -47,6 +47,7 @@
     {
       "id": "recovery",
       "agent": "claude",
+      "model": "sonnet",
       "prompt": "Review only the recovery guidance in README.md. Give concrete evidence and a concise improvement proposal. Do not run tests.",
       "context": [
         "README.md"

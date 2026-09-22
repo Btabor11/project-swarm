@@ -124,7 +124,7 @@ test('an empty job list still renders a valid, width-bounded summary', () => {
 // --- CLI integration: the existing JSON `monitor` contract must not change. ---
 
 function fixtureManifest() {
-  return { version: 1, concurrency: 2, jobs: [{ id: 'writer', agent: 'claude', prompt: 'Do the task.', context: ['input.txt'], outputs: [], timeoutMs: 5000, tier: 'mid' }] };
+  return { version: 1, concurrency: 2, jobs: [{ id: 'writer', agent: 'claude', model: 'haiku', prompt: 'Do the task.', context: ['input.txt'], outputs: [], timeoutMs: 5000, tier: 'mid' }] };
 }
 
 function fakeSpawn(_command, _args, options) {

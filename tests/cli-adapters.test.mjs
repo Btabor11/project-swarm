@@ -8,7 +8,7 @@ import {spawn} from 'node:child_process';
 import {extraCliArgs,parseExtraCli,extraCliEnvironment,extraCliDoctor} from '../tools/cli-adapters.mjs';
 import {runManifest,integrateRun,summarizeRun,validateManifest} from '../tools/swarm.mjs';
 const value={summary:'Generated from supplied text only.',files:[{path:'report.md',content:'Reviewed.'}]};
-const job=agent=>({id:agent,agent,context:['input.md'],outputs:['report.md'],prompt:'Review.',timeoutMs:1000});
+const job=agent=>({id:agent,agent,model:'test-model',context:['input.md'],outputs:['report.md'],prompt:'Review.',timeoutMs:1000});
 const manifest=jobs=>({version:1,concurrency:2,jobs});
 const events=agent=>[{type:'system',subtype:'init',model:'observed-model'},agent==='hermes'?{type:'result',exit_code:0,text:JSON.stringify(value),tokens:{input:10,output:4}}:{type:'result',subtype:'success',is_error:false,result:JSON.stringify(value),usage:{input_tokens:10,output_tokens:4}}];
 const lines=items=>items.map(event=>JSON.stringify(event)).join('\n')+'\n';

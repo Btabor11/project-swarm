@@ -13,7 +13,7 @@ async function fixture(t) {
   return root;
 }
 
-const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000, ...overrides });
+const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000, ...overrides });
 const manifest = jobs => ({ version: 1, concurrency: 2, jobs: jobs ?? [job()] });
 
 test('accepts each valid tier, with a reason required only for expensive', () => {
@@ -57,17 +57,17 @@ test('an explicit per-task model wins over tier: tier never changes the model th
   assert.deepEqual(claudeArgs(cheapSameModel), claudeArgs(withTier));
 });
 
-test('a CLI job may omit model entirely even when it declares a tier', () => {
-  const args = claudeArgs(job({ tier: 'mid' }));
+test('claudeArgs omits --model only when the job object itself carries none, though validateManifest never lets such a job run', () => {
+  const args = claudeArgs(job({ tier: 'mid', model: undefined }));
   assert.equal(args.includes('--model'), false);
 });
 
-test('preflight (plan) output surfaces tier and tierReason as advisory metadata', async t => {
+test('preflight (plan) output surfaces tier, tierReason, and the required explicit model as advisory metadata', async t => {
   const root = await fixture(t);
-  const report = await preflightProject(root, manifest([job({ tier: 'expensive', tierReason: 'Concurrency: new async retry queue.' })]));
+  const report = await preflightProject(root, manifest([job({ tier: 'expensive', tierReason: 'Concurrency: new async retry queue.', model: 'claude-sonnet-4-6' })]));
   assert.equal(report.jobs[0].tier, 'expensive');
   assert.equal(report.jobs[0].tierReason, 'Concurrency: new async retry queue.');
-  assert.equal(report.jobs[0].model, null);
+  assert.equal(report.jobs[0].model, 'claude-sonnet-4-6');
 });
 
 test('preflight (plan) output reports null tier for a manifest that does not use it', async t => {

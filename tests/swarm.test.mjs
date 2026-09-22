@@ -14,7 +14,7 @@ async function fixture(t) {
   return root;
 }
 
-const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000, ...overrides });
+const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000, ...overrides });
 const manifest = jobs => ({ version: 1, concurrency: 2, jobs: jobs ?? [job()] });
 
 // Only tests inject a provider. The production Claude adapter spawns the literal claude command.
@@ -123,13 +123,20 @@ test('cancellation marker stops only this run and its queued jobs', async t => {
 });
 
 test('fixed Claude adapter has no shell/agent tools and passes model only when explicit', () => {
-  const args = claudeArgs(job());
+  const args = claudeArgs(job({ model: undefined }));
   assert.equal(args.includes('--model'), false);
   assert.equal(args[args.indexOf('--tools') + 1], 'Read,Glob,Grep,Write,Edit');
   assert.ok(args.includes('--restricted'));
   assert.ok(args.includes('--strict-mcp-config'));
   assert.deepEqual(claudeArgs(job({ model: 'claude-sonnet-4-6' })).slice(-2), ['--model', 'claude-sonnet-4-6']);
-  assert.equal(claudeArgs(job({ outputs: [] }))[args.indexOf('--tools') + 1], 'Read,Glob,Grep');
+  assert.equal(claudeArgs(job({ outputs: [], model: undefined }))[args.indexOf('--tools') + 1], 'Read,Glob,Grep');
+});
+
+test('every job, CLI or API, must name an explicit model; there is no CLI default', () => {
+  assert.throws(() => validateManifest(manifest([job({ model: undefined })])), /writer requires an explicit model; the runner never uses a CLI default/);
+  assert.throws(() => validateManifest(manifest([job({ model: '' })])), /writer requires an explicit model; the runner never uses a CLI default/);
+  assert.doesNotThrow(() => validateManifest(manifest([job({ model: 'sonnet' })])));
+  assert.throws(() => validateManifest(manifest([job({ id: 'openai-job', agent: 'openai', model: undefined })])), /openai-job requires an explicit model; the runner never uses a CLI default/);
 });
 
 test('bounds simultaneous fresh processes to manifest concurrency', async t => {

@@ -91,9 +91,11 @@ export function validateManifest(manifest) {
     if (!job || typeof job.id !== 'string' || !ID.test(job.id) || ids.has(job.id.toLowerCase())) fail(`Invalid or duplicate job id: ${job?.id}`);
     ids.add(job.id.toLowerCase());
     if (![...CLI_AGENTS, ...API_AGENTS].includes(job.agent)) fail(`Unsupported agent: ${job.agent}`);
-    if (API_AGENTS.includes(job.agent) && !job.model) fail('API jobs require an explicit model');
+    // Every job, CLI or API, must name its model: the runner never falls back to a CLI default
+    // (for Claude, that default is the user's own, often the most expensive, model).
+    if (typeof job.model !== 'string' || !job.model.trim()) fail(`Job ${job.id} requires an explicit model; the runner never uses a CLI default`);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/.test(job.model)) fail('Invalid explicit model name');
     if (job.maxOutputTokens !== undefined && (!API_AGENTS.includes(job.agent) || !Number.isInteger(job.maxOutputTokens) || job.maxOutputTokens < 256 || job.maxOutputTokens > 32768)) fail('maxOutputTokens is API-only and must be 256–32768');
-    if (job.model !== undefined && (typeof job.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/.test(job.model))) fail('Invalid explicit model name');
     // tier is advisory routing metadata for the coordinator, not a model selector: an explicit
     // job.model always wins. expensive must name why, so the choice is inspectable, not gut feel.
     if (job.tier !== undefined && !TIERS.includes(job.tier)) fail(`Unknown tier: ${job.tier}`);
