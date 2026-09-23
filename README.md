@@ -16,7 +16,7 @@ If a user pastes this repository's URL and asks you to install it, follow these 
 2. Get the shared install onto the newest release:
    - If `~/.project-swarm` does **not** exist yet:
      ```sh
-     git clone https://github.com/Btabor11/project-swarm ~/.project-swarm
+     git clone https://github.com/RDW-Labz/project-swarm ~/.project-swarm
      git -C ~/.project-swarm tag --list 'v*' --sort=-v:refname | head -1
      git -C ~/.project-swarm checkout <the tag printed above>
      ```
@@ -50,7 +50,7 @@ You need **Node.js 20.3+**, macOS/Linux/WSL, and one configured provider. For Cl
 Clone the public repository. No GitHub account or access invitation is required:
 
 ```sh
-git clone https://github.com/Btabor11/project-swarm.git
+git clone https://github.com/RDW-Labz/project-swarm.git
 cd project-swarm
 npm test
 npm run check
@@ -207,4 +207,4 @@ Eight adapters are implemented: `codex` (macOS-sandboxed Codex CLI), `claude`, `
 
 Use the included recipes for code review, UI source review, documentation, test planning, four-worker Claude reviews, and mixed-provider reviews. API workers do not see rendered screenshots or run tests. The coordinator performs those checks. Hermes and Qwen use serialized copied context and strict JSON file envelopes; they do not get file-editing tools through this adapter. Their compatibility and authentication must be checked independently. Raising concurrency is opt-in and increases simultaneous resource use; it is not a spending cap.
 
-The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `Btabor11` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own provider authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no example website assets, customer data, credentials, or private agent transcripts.
+The repository is public. Anyone can clone it, download a release archive, or fork it. Cloning does not require a GitHub account; creating a fork does. `RDW-Labz` in the clone URL identifies the repository owner, not an account you need to sign into. Each person uses their own provider authentication for live workers. The code and documentation are licensed under [Apache 2.0](LICENSE); preserve the license and applicable notices when redistributing. This package includes no example website assets, customer data, credentials, or private agent transcripts.

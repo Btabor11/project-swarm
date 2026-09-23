@@ -107,7 +107,7 @@ For upgrades, run `node ~/.project-swarm/tools/swarm.mjs update` in the shared i
 Anyone can clone the toolkit without a GitHub account or invitation:
 
 ```sh
-git clone https://github.com/Btabor11/project-swarm.git
+git clone https://github.com/RDW-Labz/project-swarm.git
 ```
 
 The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own provider setup.
