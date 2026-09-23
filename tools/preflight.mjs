@@ -10,7 +10,7 @@ export async function preflightProject(root, manifest) {
   // Use the same guarded reads as execution. Do not follow validation with a
   // second, unguarded filesystem walk merely to gather size information.
   const validated = await validateProject(root, manifest);
-  const advisories = [];
+  const advisories = [...validated.warnings];
   const copies = new Map();
   const jobs = validated.jobs.map((checked, index) => {
     const job = manifest.jobs[index];

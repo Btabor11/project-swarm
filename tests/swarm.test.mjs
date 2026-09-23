@@ -46,7 +46,7 @@ test('rejects traversal, absolute paths, secrets, collisions, and executable ada
   }
   assert.throws(() => validateManifest(manifest([job(), job({ id: 'second' })])), /collision/);
   assert.throws(() => validateManifest(manifest([job({ command: '/tmp/evil' })])), /Unknown/);
-  assert.throws(() => validateManifest(manifest([job({ agent: 'codex' })])), /Unsupported/);
+  assert.throws(() => validateManifest(manifest([job({ agent: 'unknown-agent' })])), /Unsupported/);
   assert.throws(() => validateManifest({ ...manifest(), concurrency: 33 }), /Concurrency/);
 });
 
@@ -432,4 +432,11 @@ test('--require-checks fails the CLI command when a check fails; the default exi
   assert.equal(JSON.parse(error.stdout).checksPassed,false);
   return true;
  });
+});
+
+
+test('file-backed probes reject nonzero exit and signals, including failed login status', async () => {
+ const {execViaFile}=await import('../tools/cli-adapters.mjs');
+ await assert.rejects(execViaFile(process.execPath,['-e','process.exit(7)']),/probe failed/);
+ await assert.rejects(execViaFile(process.execPath,['-e',"process.kill(process.pid,'SIGTERM')"]),/probe failed/);
 });

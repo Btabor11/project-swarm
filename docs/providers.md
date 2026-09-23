@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm 1.2 supports seven adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm 1.4 supports eight adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 
@@ -28,7 +28,7 @@ node tools/swarm.mjs doctor ollama
 node tools/swarm.mjs doctor lambda
 ```
 
-`doctor` without an argument checks Claude for backward compatibility. `doctor all` reports each provider independently. API `configured` means an environment credential is present, or an Ollama or Lambda origin you operate has been selected. `liveVerified: false` is deliberate: diagnostics do not contact endpoints or prove authentication, model access, server health, quota, or output-schema support. `run` checks only the providers its jobs actually select.
+`doctor` without an argument checks Claude for backward compatibility. `doctor all` reports each provider independently. API `configured` means an environment credential is present, or an Ollama or Lambda origin you operate has been selected. `liveVerified: false` is deliberate: API diagnostics do not contact endpoints or prove authentication, model access, server health, quota, or output-schema support. `run` checks only the providers its jobs actually select.
 
 Configure credentials using your normal secure environment/secret manager, outside the worker. Never put real keys in a manifest, command example committed to Git, prompt, or copied context. The runner does not read `.env` automatically. If you choose Node's environment-file feature, keep that file outside version control and never include it as context. API account access and billing are separate from cloning this public repository.
 
@@ -104,3 +104,17 @@ These CLIs may read their authentication stores. Hermes may retain its own host 
 Primary restriction references: [Hermes CLI flags and result events](https://hermes-agent.nousresearch.com/docs/reference/cli-commands), [Hermes tool selection source](https://github.com/NousResearch/hermes-agent/blob/main/model_tools.py), [Qwen headless mode](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/), and [Qwen tool-budget schema](https://github.com/QwenLM/qwen-code/blob/main/packages/vscode-ide-companion/schemas/settings.schema.json).
 
 Local compatibility evidence: official npm Qwen Code 0.24.0 was installed into an ignored verification directory and its real version/help output confirmed the required flags, including the explicit zero-tool-call semantics. This did not authenticate or send an inference request. Hermes was not installed in the verification environment; its adapter remains source-reviewed and mock-process tested until an operator passes doctor and a bounded live exchange.
+
+## Codex CLI (`codex`, macOS only)
+
+Every Codex job must name `model`, matching `/^[A-Za-z0-9._:-]{1,80}$/`. The runner always passes `-m <job.model>` and never uses the Codex config default. Install and authenticate Codex separately, then run `node tools/swarm.mjs doctor codex`. Doctor checks macOS, `sandbox-exec`, `codex --version`, successful `codex login status`, and every required exec flag through file-backed help probes. It makes no model call. Other platforms report unsupported and refuse Codex jobs.
+
+Codex runs in its own detached git worktree of the root repository's HEAD at `.swarm/runs/<run-id>/worktrees/<job-id>`. The full committed project is available, so the worker can run tests. Uncommitted root changes are not included; `validate` and `preflight` warn when declared context or output files have uncommitted changes. Context is the prompt's “read these first” list. Only declared output files become retained proposals for inspect/integrate/conflict checks. The runner removes the worktree after success, failure, timeout, or cancellation. Timeouts and cancellation terminate the entire detached process group.
+
+The OS seatbelt sandbox enforces file access; prompt text is not the boundary. The runner invokes `sandbox-exec -f <profile> codex exec -m <model> --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --ephemeral -C <worktree> -o <last-message> <prompt>`. Codex's own sandbox is bypassed because the outer seatbelt is the boundary. Stdin is `/dev/null` (Node's `ignore` stdio); Codex otherwise waits for stdin. When `/etc/ssl/cert.pem` exists, the worker receives `SSL_CERT_FILE=/etc/ssl/cert.pem` because TLS cannot use the keychain-backed trust store inside this sandbox.
+
+The profile starts with a home-directory read/write denial, then grants reads of the home literal and necessary ancestor literals, the job worktree, the repository git common directory, `~/.codex`, `~/.nvm`, `~/.cache`, `~/.npm`, `~/.local/share/uv`, `~/.gitconfig`, and `~/Library/Caches`. Writes are limited to the job worktree, its git worktree metadata directory, `~/.codex`, `~/.cache`, `~/.npm`, `/private/tmp`, `/private/var/folders`, `/dev/null`, and `/dev/tty*`. The common git directory is otherwise read-only. System reads outside the home directory and network access remain available as in the reference profile.
+
+The final rules re-deny reads/writes of `~/.oasis`, `~/Library/Keychains`, `~/.ssh`, `~/.aws`, and `~/.config`, plus mach lookups of `com.apple.SecurityServer` and `com.apple.securityd.xpc`. Optional per-job `readPaths` grants extra absolute read-only toolchain paths. Paths under denied directories (including resolved aliases) are refused. Paths embedded in profiles cannot contain quotes, backslashes, or control characters. Do not place secrets in the committed project or granted toolchain paths.
+
+The final message must be one JSON line `{"files_changed":[...],"notes":[...]}`; changed paths must be declared outputs. The runner reads it from the `-o` file inside the job worktree (also inside the run directory), saves it as `response.txt`, and validates the result before collecting outputs. Parseable `tokens used` output is recorded as `total_tokens`, grouped under provider `codex`; missing usage and dollar cost remain unavailable. Unit tests inject fake workers and do not claim a live Codex or seatbelt smoke run.
