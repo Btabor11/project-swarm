@@ -5,3 +5,5 @@ artifacts/
 .env.*
 .DS_Store
 *.tgz
+.swarm-install.json
+.swarm-projects.json

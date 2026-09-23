@@ -1,0 +1,29 @@
+name: Release tag
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      # TODO: pin to a full commit SHA once a reviewed one is available for this major version.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag the release if package.json's version has no matching tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag already exists; nothing to do."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"
