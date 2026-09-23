@@ -29,6 +29,27 @@ test('compatibility rejects missing restrictions and never treats help as live a
  for(const agent of ['hermes','qwen']){await assert.rejects(extraCliDoctor(agent,async()=>({stdout:'old CLI'})),/restriction/);const result=await extraCliDoctor(agent,async(_command,args)=>({stdout:args.includes('--version')?'test-version':extraCliArgs(job(agent)).join(' ')}));assert.equal(result.status,'compatible');assert.equal(result.liveVerified,false);}
  assert.equal(extraCliEnvironment('hermes',{HERMES_KANBAN_TASK:'other-task',PATH:'safe'}).HERMES_KANBAN_TASK,undefined);assert.equal(extraCliEnvironment('qwen',{QWEN_SYSTEM_MD:'evil',QWEN_CODE_UNATTENDED_RETRY:'true',PATH:'safe'}).QWEN_SYSTEM_MD,undefined);
 });
+test('extraCliDoctor retries a truncated help read once and accepts a complete second read',async()=>{
+ for(const agent of ['hermes','qwen']){
+  const full=extraCliArgs(job(agent)).join(' ');let helpCalls=0;
+  const result=await extraCliDoctor(agent,async(_command,args)=>{if(args.includes('--version'))return {stdout:'test-version'};helpCalls++;return {stdout:helpCalls===1?full.slice(0,Math.floor(full.length/2)):full};});
+  assert.equal(helpCalls,2);assert.equal(result.status,'compatible');
+ }
+});
+test('extraCliDoctor reports a probe failure, not a flags failure, when help output stays empty after retry',async()=>{
+ for(const agent of ['hermes','qwen']){
+  let helpCalls=0;
+  await assert.rejects(extraCliDoctor(agent,async(_command,args)=>{if(args.includes('--version'))return {stdout:'test-version'};helpCalls++;return {stdout:''};}),new RegExp(`${agent} help probe failed \\(no or empty output\\)`));
+  assert.equal(helpCalls,2);
+ }
+});
+test('extraCliDoctor still reports missing flags when help output is complete both times',async()=>{
+ for(const agent of ['hermes','qwen']){
+  const missingOneFlag=extraCliArgs(job(agent)).filter(token=>token!=='--safe-mode').join(' ');let helpCalls=0;
+  await assert.rejects(extraCliDoctor(agent,async(_command,args)=>{if(args.includes('--version'))return {stdout:'test-version'};helpCalls++;return {stdout:missingOneFlag};}),/restriction/);
+  assert.equal(helpCalls,2);
+ }
+});
 test('monitor reports real queue states, elapsed durations and numeric provider usage',()=>{
  const state={id:'x',status:'running',startedAt:new Date(1000).toISOString(),concurrency:4,peakConcurrency:2,jobs:[{id:'a',agent:'qwen',status:'complete',startedAt:new Date(1000).toISOString(),finishedAt:new Date(1200).toISOString(),durationMs:200,usage:{input_tokens:10,ignore:'private'}},{id:'b',agent:'hermes',status:'running',startedAt:new Date(1500).toISOString()},{id:'c',agent:'claude',status:'queued'}]};
  const report=summarizeRun(state,2000);assert.deepEqual(report.counts,{queued:1,running:1,complete:1,failed:0,timeout:0,cancelled:0});assert.equal(report.peakConcurrency,2);assert.equal(report.jobs[1].durationMs,500);assert.equal(report.jobs[2].durationMs,null);assert.deepEqual(report.usageByProvider.qwen,{input_tokens:10});

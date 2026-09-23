@@ -210,6 +210,51 @@ test('doctor rejects incompatible CLIs without a model call', async()=>{
  await assert.rejects(doctor({exec:async(_cmd,args)=>({stdout:args[0]==='--version'?'old CLI':'--tools'})}),/lacks required flags/);
 });
 
+const CLAUDE_FLAGS=['--restricted','--safe-mode','--tools','--permission-prompts','--strict-mcp-config','--mcp-config','--no-session-persistence','--no-chrome','--output-format'];
+const FULL_HELP=`Usage: claude [options]\n${CLAUDE_FLAGS.join(' ')}\n`;
+
+test('doctor retries a truncated help probe once and accepts a complete second read', async()=>{
+ const {doctor}=await import('../tools/swarm.mjs');
+ let helpCalls=0;
+ const result=await doctor({exec:async(_cmd,args)=>{
+  if(args[0]==='--version')return {stdout:'2.1.280 (Claude Code)'};
+  helpCalls++;
+  return {stdout:helpCalls===1?FULL_HELP.slice(0,Math.floor(FULL_HELP.length/2)):FULL_HELP};
+ }});
+ assert.equal(helpCalls,2);
+ assert.equal(result.status,'compatible');
+});
+
+test('doctor reports a probe failure, not a flags failure, when help output stays empty after retry',async()=>{
+ const {doctor}=await import('../tools/swarm.mjs');
+ let helpCalls=0;
+ await assert.rejects(doctor({exec:async(_cmd,args)=>{
+  if(args[0]==='--version')return {stdout:'2.1.280 (Claude Code)'};
+  helpCalls++;
+  return {stdout:''};
+ }}),/Claude CLI help probe failed \(no or empty output\)/);
+ assert.equal(helpCalls,2);
+});
+
+test('doctor still reports missing flags when help output is complete both times',async()=>{
+ const {doctor}=await import('../tools/swarm.mjs');
+ const missingFlagHelp=FULL_HELP.replace('--no-chrome ','');
+ let helpCalls=0;
+ await assert.rejects(doctor({exec:async(_cmd,args)=>{
+  if(args[0]==='--version')return {stdout:'2.1.280 (Claude Code)'};
+  helpCalls++;
+  return {stdout:missingFlagHelp};
+ }}),/Installed Claude CLI lacks required flags: --no-chrome\./);
+ assert.equal(helpCalls,2);
+});
+
+test('execViaFile reads full stdout through a temp file even when the exit races the pipe',async()=>{
+ const {execViaFile}=await import('../tools/cli-adapters.mjs');
+ const payload='x'.repeat(21644);
+ const result=await execViaFile(process.execPath,['-e',`process.stdout.write(${JSON.stringify(payload)},()=>{process.exit(0)});`],{timeout:10000});
+ assert.equal(result.stdout,payload);
+});
+
 test('explicit concurrency four creates four simultaneous fresh processes and drains the queue', async t => {
  const root=await fixture(t);let active=0,maximum=0,launched=0;
  const provider=fake(`setTimeout(()=>{${done}},120)`);
