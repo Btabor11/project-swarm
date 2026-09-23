@@ -18,6 +18,8 @@ const CLI_AGENTS = ['claude', ...EXTRA_CLI_AGENTS];
 export const TIERS = ['cheap', 'mid', 'expensive'];
 const API_PROGRESS_NOTE = 'Single-request API jobs return only when the request settles; incremental worker activity is not observable.';
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
+const CHECK_NAME = /^[A-Za-z0-9 ._-]{1,60}$/;
+const CHECK_TAIL = 2000;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(message); };
 const runId = () => `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
@@ -81,8 +83,19 @@ async function jsonWrite(root, value, data) {
 
 export function validateManifest(manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks'].includes(key)) fail(`Unknown manifest field: ${key}`);
   if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 32)) fail('Concurrency must be 1–32');
+  if (manifest.checks !== undefined) {
+    if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
+    for (const check of manifest.checks) {
+      if (!check || typeof check !== 'object') fail('Invalid check');
+      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs'].includes(key)) fail(`Unknown check field: ${key}`);
+      if (typeof check.name !== 'string' || !CHECK_NAME.test(check.name)) fail(`Invalid check name: ${check?.name}`);
+      if (!Array.isArray(check.argv) || !check.argv.length) fail(`Check argv must be a non-empty array: ${check.name}`);
+      if (check.argv.some(item => typeof item !== 'string')) fail(`Check argv items must be strings: ${check.name}`);
+      if (check.timeoutMs !== undefined && (!Number.isInteger(check.timeoutMs) || check.timeoutMs < 1000 || check.timeoutMs > 1800000)) fail(`Check timeoutMs must be 1000–1800000: ${check.name}`);
+    }
+  }
   const ids = new Set();
   const writers = new Set();
   for (const job of manifest.jobs) {
@@ -383,7 +396,60 @@ export async function cancelRun(root, id) {
   return { id, status: 'cancellation-requested' };
 }
 
-export async function integrateRun(root, id) {
+// {integrated} and {integrated:.ext} must be a whole argv item; a placeholder that expands
+// to zero files means the check has nothing to act on, so it is skipped rather than run empty.
+function expandCheckArgv(argv, integratedFiles) {
+  let empty = false;
+  const expanded = [];
+  for (const item of argv) {
+    const match = item === '{integrated}' ? '' : /^\{integrated:(\.[^}]+)\}$/.exec(item)?.[1];
+    if (match === undefined) { expanded.push(item); continue; }
+    const files = match ? integratedFiles.filter(file => file.endsWith(match)) : integratedFiles;
+    if (!files.length) empty = true;
+    expanded.push(...files);
+  }
+  return { argv: expanded, empty };
+}
+
+function runCheck(name, argv, cwd, timeoutMs, spawnImpl) {
+  return new Promise(resolve => {
+    const start = Date.now();
+    let chunks = [], size = 0, settled = false, child, timer;
+    // Bound retained memory while still keeping enough tail to slice exactly 2000 bytes later.
+    const push = data => {
+      chunks.push(data); size += data.length;
+      while (chunks.length > 1 && size - chunks[0].length >= CHECK_TAIL) size -= chunks.shift().length;
+    };
+    const finish = (status, exitCode) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const combined = Buffer.concat(chunks);
+      const tail = combined.length > CHECK_TAIL ? combined.subarray(combined.length - CHECK_TAIL).toString('utf8') : combined.toString('utf8');
+      resolve({ name, status, exitCode, durationMs: Date.now() - start, tail });
+    };
+    try {
+      const [program, ...rest] = argv;
+      child = spawnImpl(program, rest, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
+      child.on('error', () => finish('error', null));
+      for (const stream of [child.stdout, child.stderr]) stream?.on('data', data => push(Buffer.isBuffer(data) ? data : Buffer.from(data)));
+      child.on('close', code => finish(code === 0 ? 'passed' : 'failed', code));
+      timer = setTimeout(() => { child.kill('SIGKILL'); finish('timeout', null); }, timeoutMs);
+    } catch { finish('error', null); }
+  });
+}
+
+async function runChecks(root, checks, integratedFiles, spawnImpl) {
+  const results = [];
+  for (const check of checks) {
+    const { argv, empty } = expandCheckArgv(check.argv, integratedFiles);
+    if (empty) { results.push({ name: check.name, status: 'skipped', exitCode: null, durationMs: 0, tail: '' }); continue; }
+    results.push(await runCheck(check.name, argv, root, check.timeoutMs ?? 300000, spawnImpl));
+  }
+  return { checks: results, checksPassed: results.every(check => !['failed', 'timeout', 'error'].includes(check.status)) };
+}
+
+export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn } = {}) {
   root = await fs.realpath(root);
   const state = await readState(root, id);
   if (state.root !== root || state.id !== id || state.status !== 'complete') fail('Only a complete run from this repository can be integrated');
@@ -415,7 +481,6 @@ export async function integrateRun(root, id) {
     try {
       for (const change of writes) { await write(root, change.file, change.bytes, false, change.mode); applied.push(change); }
       state.integratedAt = new Date().toISOString(); state.integratedFiles = writes.map(change => change.file);
-      await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
     } catch (error) {
       for (const change of applied.reverse()) {
         if (change.previous === null) await fs.unlink(await safePath(root, change.file));
@@ -423,7 +488,12 @@ export async function integrateRun(root, id) {
       }
       throw error;
     }
-    return { id, status: 'integrated', files: state.integratedFiles };
+    // Checks run after every integrated file is written and are never rolled back on failure:
+    // a formatter may legitimately rewrite the files this same integration just wrote.
+    const checksResult = noChecks ? { checks: [], checksPassed: true, checksSkipped: true } : { ...await runChecks(root, manifest.checks ?? [], state.integratedFiles, spawnImpl), checksSkipped: false };
+    Object.assign(state, checksResult);
+    await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+    return { id, status: 'integrated', files: state.integratedFiles, ...checksResult };
   } finally { await fs.rmdir(lock); }
 }
 
@@ -512,7 +582,7 @@ async function main() {
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
   const [command,argument,...rest]=args;
-  if(command==='--help'||command==='help'||!command){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | inspect RUN | integrate RUN | cancel RUN\n');return;}
+  if(command==='--help'||command==='help'||!command){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | inspect RUN | integrate RUN [--no-checks|--require-checks] | cancel RUN\n');return;}
   // monitor keeps its JSON snapshot as the default; --view/--watch are read-only human rendering
   // extras consumed here so the generic argument-count check below still fails on anything else.
   let view=false,watchSeconds=null;
@@ -529,6 +599,18 @@ async function main() {
       rest.push(flags[index]);
     }
     if(watchSeconds!==null&&(watchSeconds<=0))fail('--watch requires a positive number of seconds');
+  }
+  // integrate's checks flags are read-only selection of whether/how checks run; strip them
+  // here so the generic argument-count check below still fails on anything else.
+  let noChecks=false,requireChecks=false;
+  if(command==='integrate'){
+    const flags=rest.splice(0,rest.length);
+    for(const flag of flags){
+      if(flag==='--no-checks'){noChecks=true;continue;}
+      if(flag==='--require-checks'){requireChecks=true;continue;}
+      rest.push(flag);
+    }
+    if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
   }
   if(rest.length||!['doctor','validate','preflight','run','status','monitor','inspect','integrate','cancel'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
   root=await fs.realpath(root);let result;
@@ -582,9 +664,10 @@ async function main() {
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
   else if(command==='inspect')result=await inspectRun(root,argument);
   else if(command==='cancel')result=await cancelRun(root,argument);
-  else result=await integrateRun(root,argument);
+  else result=await integrateRun(root,argument,{noChecks});
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if(['failed','cancelled'].includes(result.status))process.exitCode=1;
+  if(command==='integrate'&&requireChecks&&result.checksPassed===false)process.exitCode=1;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { process.stderr.write(`${JSON.stringify({ status: 'error', error: error.message })}\n`); process.exitCode = 1; });

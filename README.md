@@ -144,7 +144,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
   # scroll-anim     claude  -       -     > running    9s    1
   ```
 - `inspect <run-id>` — inspect proposed outputs and conflicts without importing.
-- `integrate <run-id>` — import reviewed, declared outputs from a successful run.
+- `integrate <run-id>` — import reviewed, declared outputs from a successful run, then run the manifest's optional `checks` (format, tests) right after writing files; add `--no-checks` to skip them or `--require-checks` to fail the command when a check fails.
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
 - `--root <project>` — explicitly choose the project, before or after the command.
 

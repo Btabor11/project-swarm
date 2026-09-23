@@ -27,6 +27,7 @@ Replace the example paths with files in your target project.
 - `version`: required, exactly `1`.
 - `jobs`: required array of 1–256 jobs.
 - `concurrency`: optional integer from 1 to 32; default is 2. The effective parallelism is never greater than the number of jobs.
+- `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
 
 Unknown top-level fields are rejected.
 
@@ -72,6 +73,8 @@ node tools/swarm.mjs monitor <run-id> --view
 node tools/swarm.mjs monitor <run-id> --view --watch 5
 node tools/swarm.mjs inspect <run-id>
 node tools/swarm.mjs integrate <run-id>
+node tools/swarm.mjs integrate <run-id> --no-checks
+node tools/swarm.mjs integrate <run-id> --require-checks
 node tools/swarm.mjs cancel <run-id>
 ```
 
@@ -114,6 +117,38 @@ API jobs additionally require a complete, non-refused response and valid JSON wi
 The `monitor` command is a single read-only snapshot, suitable for periodic coordinator polling. New runs record `queuedAt`, `startedAt`, `finishedAt`, `durationMs`, configured concurrency, and observed peak active jobs. Counts reflect recorded queue state, not proof that stale processes survived a coordinator crash. Numeric usage is grouped by provider without combining incompatible token fields or estimating missing costs. Older run records remain readable; unavailable historical timings remain null.
 
 `monitor <run-id>` still prints the JSON snapshot above by default; nothing about that output changed. Add `--view` for a human table instead: one row per job (`id`, `agent`, `model`, `tier`, `status`, elapsed/duration, declared output count), a summary line (running/done/failed/queued counts, total elapsed, peak concurrency), and, where recorded, usage per provider. Every status shows a symbol and a word together, never color alone, and color is used only on a TTY with `NO_COLOR` unset. Add `--watch [seconds]` (default 2) to keep `--view` re-rendering in place until the run reaches a terminal status or you press Ctrl+C; it only reads saved state and never starts, cancels, or integrates anything.
+
+## Checks
+
+`integrate <run-id>` runs the manifest's `checks` in declared order immediately after it writes the integrated files, so format drift and failing tests surface in the same command instead of costing the coordinator a separate job. Each check is `{"name": "...", "argv": ["...", ...], "timeoutMs": 300000}`:
+
+```json
+{
+  "checks": [
+    {"name": "format", "argv": ["uv", "run", "ruff", "format", "{integrated:.py}"]},
+    {"name": "pytest", "argv": ["uv", "run", "pytest", "-q"], "timeoutMs": 600000}
+  ]
+}
+```
+
+- `name`: required, 1–60 characters from letters, digits, spaces, `.`, `_`, `-`.
+- `argv`: required non-empty array of strings. `argv[0]` is the program; no shell is ever used, so shell metacharacters in any item are passed through literally, never interpreted.
+- `timeoutMs`: optional integer 1,000–1,800,000; default 300,000.
+
+Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrated}` expands to the run's integrated file paths (relative to the project root) as separate argv items; `{integrated:.py}` (or any other extension) expands to only the integrated files with that extension. If a placeholder expands to zero files, that check is skipped (`status: "skipped"`) rather than run with nothing to act on.
+
+Checks run with `cwd` at the project root, the coordinator's inherited environment, and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []` and `checksSkipped: true`).
+
+The result (and the saved run state, visible from `inspect <run-id>`) gains:
+
+```json
+{
+  "checks": [{"name": "format", "status": "passed", "exitCode": 0, "durationMs": 812, "tail": "..."}],
+  "checksPassed": true
+}
+```
+
+`status` is one of `passed`, `failed` (non-zero exit), `timeout`, `error` (the program could not be launched), or `skipped`. `tail` is the last 2000 bytes of that check's combined stdout+stderr, never more. `checksPassed` is `true` only when no check failed, timed out, or errored.
 
 ## Advisory preflight
 
