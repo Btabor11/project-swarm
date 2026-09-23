@@ -10,6 +10,8 @@ import {install} from '../tools/install.mjs';
 async function fixture(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-install-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));return fs.realpath(root);}
 test('fresh installation validates its example and repeated installation is idempotent',async t=>{
  const root=await fixture(t),first=await install(root);assert.ok(first.added.length>=12);
+ assert.ok(first.added.includes('tools/codex-adapter.mjs'));
+ assert.ok(first.added.includes('tests/codex-adapter.test.mjs'));
  assert.equal((await install(root)).added.length,0);
  const result=JSON.parse(execFileSync(process.execPath,[path.join(root,'tools/swarm.mjs'),'validate','coordination/swarm-smoke.json'],{encoding:'utf8'}));assert.equal(result.root,await fs.realpath(root));assert.equal(result.status,'valid');
  const preflight=JSON.parse(execFileSync(process.execPath,[path.join(root,'tools/swarm.mjs'),'preflight','coordination/swarm-smoke.json'],{encoding:'utf8'}));assert.equal(preflight.validated,true);assert.equal(preflight.jobCount,2);assert.ok(preflight.jobs.every(job=>Array.isArray(job.files)));

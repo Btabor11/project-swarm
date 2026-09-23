@@ -14,7 +14,7 @@ export async function execViaFile(command,args,options={}){
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-probe-'));
  try{
   const file=path.join(dir,'out'),handle=await fs.open(file,'w');
-  try{await new Promise((resolve,reject)=>{const child=spawn(command,args,{...spawnOptions,stdio:['ignore',handle.fd,'ignore']});const timer=timeout?setTimeout(()=>{child.kill('SIGKILL');reject(Error(`${command} timed out`));},timeout):null;child.on('error',error=>{if(timer)clearTimeout(timer);reject(error);});child.on('close',()=>{if(timer)clearTimeout(timer);resolve();});});}
+  try{await new Promise((resolve,reject)=>{const child=spawn(command,args,{...spawnOptions,stdio:['ignore',handle.fd,'ignore']});const timer=timeout?setTimeout(()=>{child.kill('SIGKILL');reject(Error(`${command} timed out`));},timeout):null;child.on('error',error=>{if(timer)clearTimeout(timer);reject(error);});child.on('close',(code,signal)=>{if(timer)clearTimeout(timer);if(code!==0)reject(Error(`${command} probe failed (${signal??code})`));else resolve();});});}
   finally{await handle.close();}
   return {stdout:await fs.readFile(file,'utf8')};
  }finally{await fs.rm(dir,{recursive:true,force:true});}

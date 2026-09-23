@@ -34,11 +34,12 @@ Unknown top-level fields are rejected.
 ## Job fields
 
 - `id`: required unique string, 1–80 characters. The first character is an ASCII letter or digit; remaining characters may also include `_` and `-`.
-- `agent`: required: `"claude"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, or `"lambda"`.
-- `model`: required non-empty model identifier or alias, for every job on every agent. The runner never falls back to a CLI default — for Claude, that default is the user's own, often most expensive, configured model — so an omitted `model` is refused before any worker starts. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Syntax validation does not prove provider availability.
+- `agent`: required: `"claude"`, `"codex"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, or `"lambda"`.
+- `model`: required non-empty model identifier or alias, for every job on every agent. The runner never falls back to a CLI default — for Claude, that default is the user's own, often most expensive, configured model — so an omitted `model` is refused before any worker starts. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Codex instead requires `/^[A-Za-z0-9._:-]{1,80}$/` and always passes `-m <job.model>`. Syntax validation does not prove provider availability.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
-- `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for the worker to read.
-- `outputs`: required array of explicit relative file paths, at most 100 entries. Existing files are copied automatically; new files may be created. An empty array creates a read-only job.
+- `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for other workers; Codex receives them as a read-first list in its HEAD worktree.
+- `outputs`: required array of explicit relative file paths, at most 100 entries. Existing files are copied automatically; new files may be created. An empty array creates a job with no proposed files; Codex still has shell access inside its sandbox.
+- `readPaths`: optional for `codex` only, an array of at most 100 absolute read-only paths for extra toolchains. Quotes, backslashes, and control characters are refused. Paths under `~/.oasis`, `~/Library/Keychains`, `~/.ssh`, `~/.aws`, or `~/.config` are refused, including resolved aliases. Final sandbox denies override grants.
 - `maxOutputTokens`: optional for API jobs only, integer 256–32768, default 8192. This is an output limit, not a dollar budget; reasoning may consume the allowance.
 - `timeoutMs`: optional integer from 50 to 3,600,000 milliseconds. Default is 300,000 milliseconds, or five minutes.
 - `tier`: optional, one of `"cheap"`, `"mid"`, or `"expensive"`. A named routing decision for the coordinator, not a model catalog lookup: setting `tier` never chooses, overrides, or resolves a model. It is validated metadata, shown in `preflight` and `inspect` output for review. See [the routing checklist](orchestration.md) for when to use each value.
@@ -58,7 +59,7 @@ Files must be regular files no larger than 16 MiB. Each job's combined copied fi
 
 Each output has exactly one writer per manifest. Output collisions and overlapping file/directory output paths are rejected. There is no automatic handoff of one worker's new output to another worker in the same run.
 
-Claude read-only jobs receive `Read`, `Glob`, and `Grep`. Writing jobs additionally receive `Write` and `Edit`. Workers do not receive shell, network, delegation, or MCP tools. API jobs have no tools; the runner sends only copied UTF-8 text without NUL bytes in one request and validates an exact output-file envelope before writing the copy. Cloud providers require network access; Ollama defaults to localhost.
+Claude read-only jobs receive `Read`, `Glob`, and `Grep`. Writing jobs additionally receive `Write` and `Edit`. These restricted adapters do not receive shell, network, delegation, or MCP tools. Codex uses a separate macOS OS sandbox and a full detached HEAD worktree, with shell access for tests; see [Codex setup and file grants](providers.md). API jobs have no tools; the runner sends only copied UTF-8 text without NUL bytes in one request and validates an exact output-file envelope before writing the copy. Cloud providers require network access; Ollama defaults to localhost.
 
 ## Commands
 
@@ -80,7 +81,7 @@ node tools/swarm.mjs cancel <run-id>
 
 Use `--root /path/to/project` to select a project explicitly. Otherwise the runner uses its own installed project root. Manifests are loaded from the selected root.
 
-`validate` checks the assignment, paths, and copied-file size limits without creating a run or invoking a model. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
+`validate` checks the assignment, paths, and file size limits without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
 
 After installing into a project, use `coordination/swarm-smoke.json` and `coordination/swarm-parallel-review.json` in place of the standalone checkout's `examples/` paths. `--root` may appear before or after the command.
 
@@ -91,6 +92,7 @@ Each run uses these project-local locations:
 ```text
 .swarm/
   runs/<run-id>/
+    worktrees/<codex-job-id>/  # temporary detached HEAD checkout, removed after job
     manifest.json
     state.json
     <job-id>/
