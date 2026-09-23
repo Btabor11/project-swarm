@@ -6,11 +6,9 @@ import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-const execFileAsync = promisify(execFile);
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, validateEnvelope } from './cli-adapters.mjs';
+import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters.mjs';
 
 const MAX_CONTEXT = 32 * 1024 * 1024;
@@ -470,7 +468,7 @@ export async function inspectRun(root,id){
   return {id,status:state.status,integratedAt:state.integratedAt??null,jobs,files};
 }
 
-export async function doctor({exec=execFileAsync, agent='claude', env=process.env}={}){
+export async function doctor({exec=execViaFile, agent='claude', env=process.env}={}){
   const [major,minor]=process.versions.node.split('.').map(Number);
   if(major<20||(major===20&&minor<3))fail('Node 20.3 or newer is required');
   if(process.platform==='win32')fail('Use macOS, Linux, or WSL; native Windows process-group cleanup is not supported');
@@ -478,9 +476,13 @@ export async function doctor({exec=execFileAsync, agent='claude', env=process.en
   if(agent!=='claude')return apiDoctor(agent,env);
   const options={timeout:10000,maxBuffer:1024*1024};
   const version=await exec('claude',['--version'],options);
-  const help=await exec('claude',['--help'],options);
   const required=['--restricted','--safe-mode','--tools','--permission-prompts','--strict-mcp-config','--mcp-config','--no-session-persistence','--no-chrome','--output-format'];
-  const missing=required.filter(flag=>!help.stdout.includes(flag));
+  // Claude 2.1.280's --help pipe can exit before it drains even through the file-backed exec; retry once,
+  // then tell an empty/failed probe apart from output that is complete but genuinely missing a flag.
+  let help=await exec('claude',['--help'],options).catch(()=>({stdout:''}));
+  let missing=required.filter(flag=>!help.stdout.includes(flag));
+  if(missing.length){help=await exec('claude',['--help'],options).catch(()=>({stdout:''}));missing=required.filter(flag=>!help.stdout.includes(flag));}
+  if(!help.stdout)fail('Claude CLI help probe failed (no or empty output)');
   if(missing.length)fail(`Installed Claude CLI lacks required flags: ${missing.join(', ')}. Update Claude; restrictions will not be weakened.`);
   return {status:'compatible',node:process.versions.node,claude:version.stdout.trim(),auth:'not checked; use a live smoke job',liveVerified:false,platform:process.platform};
 }
