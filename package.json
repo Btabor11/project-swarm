@@ -1,6 +1,6 @@
 {
   "name": "project-swarm",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
   "private": true,
   "type": "module",
@@ -12,5 +12,5 @@
     "doctor": "node tools/swarm.mjs doctor",
     "smoke": "node tools/swarm.mjs run examples/smoke.json"
   },
-  "repository": {"type":"git","url":"https://github.com/Btabor11/project-swarm.git"}
+  "repository": {"type":"git","url":"https://github.com/RDW-Labz/project-swarm.git"}
 }
