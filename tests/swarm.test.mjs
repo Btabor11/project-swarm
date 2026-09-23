@@ -3,8 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { runManifest, integrateRun, cancelRun, readState, validateManifest, claudeArgs } from '../tools/swarm.mjs';
+
+const execFileAsync = promisify(execFile);
+const CLI = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'project-swarm-test-'));
@@ -331,4 +336,100 @@ test('normal leader exit cleans a descendant that keeps inherited stdout open wi
  const script=`import {spawn} from 'node:child_process';const child=spawn(process.execPath,['-e',"const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync('ready.pid',String(process.pid));setInterval(()=>{},1000);"],{stdio:['ignore','inherit','ignore']});const poll=setInterval(()=>{if(fs.existsSync('ready.pid')){clearInterval(poll);${done}process.exit(0);}},10);`;
  const state=await runManifest(root,manifest([job({timeoutMs:2000})]),{spawnImpl:fake(script)});descendant=Number(await fs.readFile(path.join(root,'.swarm/workspaces',state.id,'writer/ready.pid'),'utf8'));
  assert.equal(state.status,'complete');assert.equal(state.jobs[0].terminationReason,null);assert.equal(state.jobs[0].cleanupError,null);assert.ok(state.jobs[0].durationMs<1800);
+});
+
+const checkManifest = (jobs, checks) => ({ version: 1, concurrency: 2, jobs, checks });
+const twoFiles = fake(`fs.writeFileSync('a.py','x');fs.writeFileSync('b.txt','y'); ${done}`);
+
+test('validate rejects malformed checks', () => {
+ assert.throws(()=>validateManifest(checkManifest([job()],[{name:'x',argv:['node'],extra:true}])),/Unknown check field/);
+ assert.throws(()=>validateManifest(checkManifest([job()],[{name:'x',argv:[]}])),/non-empty array/);
+ assert.throws(()=>validateManifest(checkManifest([job()],[{name:'x',argv:['node',7]}])),/must be strings/);
+ assert.throws(()=>validateManifest(checkManifest([job()],[{name:'',argv:['node']}])),/Invalid check name/);
+ assert.throws(()=>validateManifest(checkManifest([job()],[{name:'bad$name',argv:['node']}])),/Invalid check name/);
+ assert.throws(()=>validateManifest(checkManifest([job()],[{name:'x',argv:['node'],timeoutMs:500}])),/timeoutMs must be 1000/);
+ assert.throws(()=>validateManifest(checkManifest([job()],Array.from({length:11},(_,i)=>({name:`c${i}`,argv:['node']})))),/at most 10 checks/);
+ assert.doesNotThrow(()=>validateManifest(checkManifest([job()],[{name:'format ok_1.2-3',argv:['node','-e','1']}])));
+});
+
+test('{integrated} and {integrated:.ext} placeholders expand to written files, and a zero-match placeholder skips', async t => {
+ const root=await fixture(t);
+ const allScript=`require('fs').writeFileSync('all-received.json',JSON.stringify(process.argv.slice(1)))`;
+ const pyScript=`require('fs').writeFileSync('py-received.json',JSON.stringify(process.argv.slice(1)))`;
+ const checks=[
+  {name:'all',argv:[process.execPath,'-e',allScript,'{integrated}']},
+  {name:'py-only',argv:[process.execPath,'-e',pyScript,'{integrated:.py}']},
+  {name:'zero-match',argv:[process.execPath,'-e','process.exit(1)','{integrated:.rb}']},
+ ];
+ const state=await runManifest(root,checkManifest([job({outputs:['a.py','b.txt']})],checks),{spawnImpl:twoFiles});
+ const result=await integrateRun(root,state.id);
+ assert.deepEqual(result.files,['a.py','b.txt']);
+ assert.deepEqual(JSON.parse(await fs.readFile(path.join(root,'all-received.json'),'utf8')),['a.py','b.txt']);
+ assert.deepEqual(JSON.parse(await fs.readFile(path.join(root,'py-received.json'),'utf8')),['a.py']);
+ assert.equal(result.checks[0].status,'passed');
+ assert.equal(result.checks[1].status,'passed');
+ assert.equal(result.checks[2].status,'skipped');
+ assert.equal(result.checks[2].exitCode,null);
+ assert.equal(result.checksPassed,true);
+});
+
+test('a passing, a failing, and a timing-out check are all reported, in order, and all run', async t => {
+ const root=await fixture(t);
+ const checks=[
+  {name:'first',argv:[process.execPath,'-e','process.exit(0)']},
+  {name:'second',argv:[process.execPath,'-e','process.exit(3)']},
+  {name:'third',argv:[process.execPath,'-e','setInterval(()=>{},1000)'],timeoutMs:1000},
+ ];
+ const state=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update});
+ const result=await integrateRun(root,state.id);
+ assert.deepEqual(result.checks.map(c=>c.name),['first','second','third']);
+ assert.equal(result.checks[0].status,'passed');assert.equal(result.checks[0].exitCode,0);
+ assert.equal(result.checks[1].status,'failed');assert.equal(result.checks[1].exitCode,3);
+ assert.equal(result.checks[2].status,'timeout');assert.equal(result.checks[2].exitCode,null);
+ assert.equal(result.checksPassed,false);
+});
+
+test('check output tail is capped at 2000 bytes', async t => {
+ const root=await fixture(t);
+ const checks=[{name:'loud',argv:[process.execPath,'-e',"process.stdout.write('x'.repeat(5000))"]}];
+ const state=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update});
+ const result=await integrateRun(root,state.id);
+ assert.equal(result.checks[0].tail.length,2000);
+ assert.equal(result.checks[0].tail,'x'.repeat(2000));
+});
+
+test('--no-checks skips checks entirely', async t => {
+ const root=await fixture(t);
+ const checks=[{name:'marker',argv:[process.execPath,'-e',"require('fs').writeFileSync('should-not-run.txt','x')"]}];
+ const state=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update});
+ const result=await integrateRun(root,state.id,{noChecks:true});
+ assert.deepEqual(result.checks,[]);
+ assert.equal(result.checksSkipped,true);
+ assert.equal(result.checksPassed,true);
+ await assert.rejects(fs.access(path.join(root,'should-not-run.txt')));
+});
+
+test('no shell: an argv item with shell metacharacters is passed literally, never interpreted', async t => {
+ const root=await fixture(t);
+ const script=`require('fs').writeFileSync('argv-received.txt',process.argv[1])`;
+ const checks=[{name:'literal',argv:[process.execPath,'-e',script,'a;touch pwned.txt']}];
+ const state=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update});
+ const result=await integrateRun(root,state.id);
+ assert.equal(result.checks[0].status,'passed');
+ assert.equal(await fs.readFile(path.join(root,'argv-received.txt'),'utf8'),'a;touch pwned.txt');
+ await assert.rejects(fs.access(path.join(root,'pwned.txt')));
+});
+
+test('--require-checks fails the CLI command when a check fails; the default exit code stays 0', async t => {
+ const root=await fixture(t);
+ const checks=[{name:'fails',argv:[process.execPath,'-e','process.exit(1)']}];
+ const withoutFlag=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update,id:'require-checks-default'});
+ const defaultRun=await execFileAsync(process.execPath,[CLI,'--root',root,'integrate',withoutFlag.id]);
+ assert.equal(JSON.parse(defaultRun.stdout).checksPassed,false);
+ const withFlag=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update,id:'require-checks-flag'});
+ await assert.rejects(execFileAsync(process.execPath,[CLI,'--root',root,'integrate',withFlag.id,'--require-checks']), error => {
+  assert.equal(error.code,1);
+  assert.equal(JSON.parse(error.stdout).checksPassed,false);
+  return true;
+ });
 });
