@@ -1,6 +1,6 @@
 # Setup and first run
 
-Project Swarm runs fresh Claude Code processes or single-request API jobs for a coordinator. It does not attach to an existing terminal, run a background service, or install a global agent skill.
+Project Swarm runs fresh Claude Code processes or single-request API jobs for a coordinator. It does not attach to an existing terminal or run a background service. `install.mjs --user` does register the skill in your agent homes (`~/.claude`, `~/.codex`) so a supporting agent can discover it automatically, but it never updates itself and never touches credentials.
 
 ## Requirements
 
@@ -28,54 +28,55 @@ node tools/swarm.mjs doctor
 
 Read [the security boundaries](../SECURITY.md) before copying sensitive files into a worker context. Add `.swarm/` to your project's `.gitignore`; local run records can contain source code, prompts, and provider responses.
 
-## Install into a project
+## One shared install per machine
 
-Run the installer from the Project Swarm checkout:
-
-```sh
-node tools/install.mjs /path/to/your-project
-```
-
-The installer copies the runner, tests, skill, examples, supporting documentation, and license material into the target project. It prevalidates the destinations and refuses to overwrite a file with different contents. Identical existing files are accepted, so repeating an unchanged installation is safe. Inspect the reported file list and commit the installed files with your project's normal review process.
-
-The installed entry points are:
-
-- `tools/swarm.mjs`, `tools/api-adapters.mjs`, and the runner/adapter tests.
-- `skills/project-swarm/SKILL.md`, with supporting guides in its `references/` directory.
-- `coordination/swarm-smoke.json`, `coordination/swarm-parallel-review.json`, and all API/workflow example manifests.
-- License material in `licenses/project-swarm/`.
-
-Installation does not configure an editor or globally register the skill. Ask your coding agent to read `skills/project-swarm/SKILL.md` explicitly, or register that file through the skill-discovery mechanism your agent supports. Do not assume all editors discover the same skill locations.
-
-You can also keep the runner in its own checkout and select a target explicitly:
+Project Swarm uses a single shared install per machine instead of a copy inside every project. Clone (or update) it once at `~/.project-swarm` (override the location with the `PROJECT_SWARM_HOME` environment variable), then register the skill for every agent home on the machine:
 
 ```sh
-node tools/swarm.mjs --root /path/to/your-project doctor
+node ~/.project-swarm/tools/install.mjs --user
 ```
 
-Without `--root`, the runner uses its own installed project root. With `--root`, manifests, copied inputs, outputs, and `.swarm/` records are all resolved in the selected project. An explicit root is not permission to use files from other projects as context.
+This writes `skills/project-swarm/SKILL.md` and its `references/` guides into `~/.claude/skills/project-swarm/` and `~/.codex/skills/project-swarm/`, whichever of those agent homes already exist on this machine (it reports any it skipped), with the skill's runner placeholder resolved to this install's absolute `tools/swarm.mjs` path. It is idempotent and only ever writes files inside those `skills/project-swarm/` directories. It refuses to run from a checkout with uncommitted changes to `tools/` or `skills/` unless you pass `--dev`, so a development checkout can't silently masquerade as a release.
+
+## Link a project
+
+From the shared install, point one project at it:
+
+```sh
+node ~/.project-swarm/tools/install.mjs /path/to/your-project
+```
+
+This writes a small pointer file, `<project>/.project-swarm.json` (`{"install": "<absolute install root>", "version": "<installed version>"}`), and registers the project path in the install's own `.swarm-projects.json` so `swarm update --projects` can find it later. It creates `coordination/` example manifests only if the project doesn't already have any. It does not copy `tools/`, `tests/`, or `skills/` into the project, and does not change package scripts, global settings, credentials, or the target's Git remote.
+
+Run commands against that project with `--root`:
+
+```sh
+node ~/.project-swarm/tools/swarm.mjs --root /path/to/your-project doctor
+```
+
+Without `--root`, the runner uses its own install directory as the project. With `--root`, manifests, copied inputs, outputs, and `.swarm/` records are all resolved in the selected project. An explicit root is not permission to use files from other projects as context. If the project's `.project-swarm.json` version differs from the running install's version, `run` and `validate` print one warning line to stderr and continue.
 
 ## Run the smallest useful exchange
 
-From the standalone checkout, use `examples/smoke.json`. From a project where you ran the installer, use `coordination/swarm-smoke.json` instead. The smoke assignment needs no project context. Before running a review example in another project, read it and adapt its explicit file paths to files that exist there. Context paths are relative to the selected project root, not relative to the manifest's directory.
+From the shared install itself, use `examples/smoke.json`. From a linked project, use `coordination/swarm-smoke.json` and `--root` instead. The smoke assignment needs no project context. Before running a review example in another project, read it and adapt its explicit file paths to files that exist there. Context paths are relative to the selected project root, not relative to the manifest's directory.
 
 ```sh
-node tools/swarm.mjs validate examples/smoke.json
-node tools/swarm.mjs run examples/smoke.json
+node ~/.project-swarm/tools/swarm.mjs validate examples/smoke.json
+node ~/.project-swarm/tools/swarm.mjs run examples/smoke.json
 ```
 
-In an installed project, the equivalent commands are:
+In a linked project, the equivalent commands are:
 
 ```sh
-node tools/swarm.mjs validate coordination/swarm-smoke.json
-node tools/swarm.mjs run coordination/swarm-smoke.json
+node ~/.project-swarm/tools/swarm.mjs --root /path/to/project validate coordination/swarm-smoke.json
+node ~/.project-swarm/tools/swarm.mjs --root /path/to/project run coordination/swarm-smoke.json
 ```
 
 The runner prints a run ID and remains attached while its workers execute. Substitute that ID below:
 
 ```sh
-node tools/swarm.mjs status <run-id>
-node tools/swarm.mjs inspect <run-id>
+node ~/.project-swarm/tools/swarm.mjs status <run-id>
+node ~/.project-swarm/tools/swarm.mjs inspect <run-id>
 ```
 
 Review the worker's response and every proposed file in `.swarm/workspaces/<run-id>/<job-id>/`. Inspect also reports integration readiness; it does not approve the content for you.
@@ -83,7 +84,7 @@ Review the worker's response and every proposed file in `.swarm/workspaces/<run-
 Only after review:
 
 ```sh
-node tools/swarm.mjs integrate <run-id>
+node ~/.project-swarm/tools/swarm.mjs integrate <run-id>
 ```
 
 Run the target project's relevant tests and inspect its actual behavior. A successful worker process or integration is not a substitute for application validation.
@@ -97,8 +98,9 @@ Run the target project's relevant tests and inspect its actual behavior. A succe
 - **A worker says it ran tests:** none of the shipped adapters grant shell tools. The coordinator must run the actual tests.
 - **Stale `running` status after a machine or runner crash:** inspect the records and processes you own. Status files are historical evidence, not proof that a process is alive. Never kill an unrelated terminal based on a stale PID.
 - **Stale integration lock:** confirm no integration is active before manually removing `.swarm/integration.lock`. Locks are not silently discarded after crashes.
+- **A project still has its own `tools/swarm.mjs` and `skills/`:** that is an old per-project copy from before the shared-install model. Run `node ~/.project-swarm/tools/swarm.mjs update --projects` to see it reported, then again with `--yes` to replace it with a pointer; the old files are moved into a timestamped `.swarm-old-copy-*/` folder in that project, never deleted.
 
-For upgrades, review the new release and compare its installed files with your local copies. The installer is intentionally not a force-update mechanism: an upgrade that changes an existing file requires a separately reviewed replacement.
+For upgrades, run `node ~/.project-swarm/tools/swarm.mjs update` in the shared install. It refuses if `tools/` or `skills/` have uncommitted changes, fetches tags, checks out the newest `v*` tag, reinstalls the skill, and reports the changelog sections between your previous and new version. It is a no-op if you are already on the newest tag. Nothing updates itself: run this only when you decide to.
 
 ## Public download
 
@@ -114,7 +116,7 @@ The owner name in the URL is the source repository location. You do not sign int
 
 ## Preflight before larger assignments
 
-Run `node tools/swarm.mjs preflight coordination/my-tasks.json` before dispatch. Resolve invalid paths, inspect large context/output warnings, and split independent concerns into bounded deliverables. Output-to-context dependencies use the starting snapshot, even with concurrency one: integrate the producer before starting a dependent batch, or supply an explicit stable interface contract. See [orchestration](orchestration.md) for the checklist and sizing guidance.
+Run `node ~/.project-swarm/tools/swarm.mjs --root /path/to/project preflight coordination/my-tasks.json` before dispatch. Resolve invalid paths, inspect large context/output warnings, and split independent concerns into bounded deliverables. Output-to-context dependencies use the starting snapshot, even with concurrency one: integrate the producer before starting a dependent batch, or supply an explicit stable interface contract. See [orchestration](orchestration.md) for the checklist and sizing guidance.
 
 `monitor` now reports CLI stdout/stderr byte counts and last-output times without including worker prose in progress metadata. API workers without streaming remain explicitly unobservable. An output timestamp is an activity signal, not evidence of task correctness.
 

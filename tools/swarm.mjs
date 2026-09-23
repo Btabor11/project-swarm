@@ -6,7 +6,8 @@ import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters.mjs';
@@ -25,6 +26,7 @@ const CHECK_TAIL = 2000;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(message); };
 const runId = () => `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+const execFileAsync = promisify(execFile);
 
 function relative(value, internal = false) {
   if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\') || /[\x00-\x1f\x7f:]/.test(value)) fail(`Invalid relative path: ${value}`);
@@ -618,6 +620,181 @@ export async function doctor({exec=execViaFile, agent='claude', env=process.env,
   return {status:'compatible',node:process.versions.node,claude:version.stdout.trim(),auth:'not checked; use a live smoke job',liveVerified:false,platform:process.platform};
 }
 
+export async function doctorAll(){
+  const providers=[];
+  for(const agent of ['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS])try{providers.push({agent,...await doctor({agent})});}catch{providers.push({agent,status:'unavailable',liveVerified:false,note:'Provider compatibility check failed; run doctor for this provider for details.'});}
+  return {status:'report',providers};
+}
+
+// --- Shared install: version, update, and onboarding -----------------------------------
+
+function parseSemver(tag){
+  const match=/^v?(\d+)\.(\d+)\.(\d+)$/.exec(typeof tag==='string'?tag.trim():'');
+  return match?[Number(match[1]),Number(match[2]),Number(match[3])]:null;
+}
+function compareSemver(a,b){for(let i=0;i<3;i++)if(a[i]!==b[i])return a[i]-b[i];return 0;}
+function highestSemver(tags){
+  let best=null,bestParsed=null;
+  for(const tag of tags){const parsed=parseSemver(tag);if(parsed&&(!bestParsed||compareSemver(parsed,bestParsed)>0)){best=tag;bestParsed=parsed;}}
+  return best;
+}
+async function gitDirty(dir,paths){
+  try{const {stdout}=await execFileAsync('git',['-C',dir,'status','--porcelain','--',...paths],{encoding:'utf8'});return stdout.trim().length>0;}
+  catch{return false;}
+}
+function extractChangelog(text,from,to){
+  const fromV=parseSemver(from),toV=parseSemver(to);
+  const picked=[];
+  if(fromV&&toV)for(const chunk of text.split(/\n(?=## )/)){
+    const heading=/^## (.+)/.exec(chunk);
+    if(!heading)continue;
+    const label=heading[1].trim();
+    if(label.toLowerCase()==='unreleased')continue;
+    const version=parseSemver(label);
+    if(version&&compareSemver(version,fromV)>0&&compareSemver(version,toV)<=0)picked.push(chunk.trim());
+  }
+  const result=[];let total=0;
+  for(const section of picked){if(total>=8000)break;const slice=section.slice(0,8000-total);result.push(slice);total+=slice.length;}
+  return result;
+}
+
+export async function swarmVersion(root,{check=false}={}){
+  root=await fs.realpath(root);
+  const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
+  let tag=null;
+  try{tag=(await execFileAsync('git',['-C',root,'describe','--tags','--exact-match'],{encoding:'utf8'})).stdout.trim()||null;}catch{tag=null;}
+  const result={version:pkg.version,installRoot:root,tag};
+  if(check){
+    try{
+      const {stdout}=await execFileAsync('git',['-C',root,'ls-remote','--tags','--refs','origin','v*'],{encoding:'utf8'});
+      const tags=[...stdout.matchAll(/refs\/tags\/(v\d+\.\d+\.\d+)/g)].map(m=>m[1]);
+      const latest=highestSemver(tags);
+      result.latest=latest?latest.replace(/^v/,''):null;
+      result.updateAvailable=latest?compareSemver(parseSemver(latest),parseSemver(pkg.version))>0:false;
+    }catch(error){
+      result.latest=null;
+      result.checkError=String(error.message??error).split('\n')[0].slice(0,200);
+    }
+  }
+  return result;
+}
+
+// Moves this shared install itself to the newest release tag. Refuses on local edits to the
+// files it is about to replace so a dev checkout is never silently discarded.
+export async function updateInstall(root,{home}={}){
+  root=await fs.realpath(root);
+  if(await gitDirty(root,['tools','skills']))fail('Refusing to update: uncommitted changes in tools/ or skills/');
+  const beforePkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
+  const from=beforePkg.version;
+  await execFileAsync('git',['-C',root,'fetch','--tags'],{encoding:'utf8'});
+  const tagList=(await execFileAsync('git',['-C',root,'tag','--list','v*'],{encoding:'utf8'})).stdout.split('\n').map(line=>line.trim()).filter(Boolean);
+  const latest=highestSemver(tagList);
+  if(!latest)fail('No release tags (v*) found in this checkout');
+  let currentTag=null;
+  try{currentTag=(await execFileAsync('git',['-C',root,'describe','--tags','--exact-match'],{encoding:'utf8'})).stdout.trim();}catch{currentTag=null;}
+  if(currentTag===latest)return {from,to:latest.replace(/^v/,''),upToDate:true};
+  await execFileAsync('git',['-C',root,'checkout','--detach',latest],{encoding:'utf8'});
+  const afterPkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
+  const to=afterPkg.version;
+  const {installUser}=await import('./install.mjs');
+  await installUser({source:root,...(home?{home}:{})});
+  await doctorAll();
+  const changelogText=await fs.readFile(path.join(root,'CHANGELOG.md'),'utf8').catch(()=>'');
+  return {from,to,changelog:extractChangelog(changelogText,from,to)};
+}
+
+async function readProjectsRegistry(root){
+  try{const value=JSON.parse(await fs.readFile(path.join(root,'.swarm-projects.json'),'utf8'));return Array.isArray(value)?value:[];}
+  catch{return [];}
+}
+
+// Files and folders the pre-1.5 installer copied into a project. Nothing else is ever moved.
+const OLD_COPY_ENTRIES=['tools/swarm.mjs','tools/preflight.mjs','tools/monitor-view.mjs','tools/cli-adapters.mjs','tools/api-adapters.mjs','tools/codex-adapter.mjs',
+  'tests/swarm.test.mjs','tests/preflight.test.mjs','tests/monitor-view.test.mjs','tests/live-progress.test.mjs','tests/cli-adapters.test.mjs','tests/adapters.test.mjs','tests/codex-adapter.test.mjs',
+  'skills/project-swarm','licenses/project-swarm'];
+
+// Finds old per-project copies (a full runner+skill checkout, not this install root) and
+// stale pointers, replacing each with a pointer only once the caller passes --yes. Old files
+// are moved aside, never deleted, and coordination/ and .swarm/ are never touched.
+export async function updateProjects(root,{projects,yes=false}={}){
+  root=await fs.realpath(root);
+  const version=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version;
+  const list=projects&&projects.length?projects:await readProjectsRegistry(root);
+  const reports=[];
+  for(const projectDir of list){
+    let project;
+    try{project=await fs.realpath(projectDir);}catch{reports.push({project:projectDir,found:[],action:'missing'});continue;}
+    const found=[];
+    let isOldCopy=false;
+    if(project!==root){
+      try{await fs.access(path.join(project,'tools/swarm.mjs'));await fs.access(path.join(project,'skills/project-swarm/SKILL.md'));isOldCopy=true;}catch{isOldCopy=false;}
+    }
+    if(isOldCopy)found.push('old-copy');
+    let pointerVersion=null;
+    try{pointerVersion=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8')).version;}catch{pointerVersion=null;}
+    if(pointerVersion&&pointerVersion!==version)found.push('stale-pointer');
+    if(!found.length){reports.push({project,found,action:'up-to-date'});continue;}
+    if(!yes){reports.push({project,found,action:'would replace with pointer'});continue;}
+    let backup=null;
+    if(isOldCopy){
+      backup=path.join(project,`.swarm-old-copy-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`);
+      await fs.mkdir(backup,{recursive:true});
+      // Only what the old installer copied in: a project's own tools/ and tests/ stay put.
+      for(const entry of OLD_COPY_ENTRIES){
+        const from=path.join(project,entry),to=path.join(backup,entry);
+        try{await fs.lstat(from);}catch(error){if(error.code==='ENOENT')continue;throw error;}
+        await fs.mkdir(path.dirname(to),{recursive:true});
+        await fs.rename(from,to);
+      }
+    }
+    await fs.writeFile(path.join(project,'.project-swarm.json'),`${JSON.stringify({install:root,version},null,2)}\n`);
+    reports.push({project,found,action:'replaced',backup});
+  }
+  return {projects:reports};
+}
+
+function agentReadiness(agent,result){
+  const ready=result.status==='compatible'||result.configured===true;
+  if(ready)return {agent,ready};
+  const fix=result.note||(result.status==='unsupported'?'unsupported on this platform':`run: node tools/swarm.mjs doctor ${agent}`);
+  return {agent,ready,fix};
+}
+
+// Plain Markdown for the agent to relay verbatim; no model calls, all facts come from doctor.
+export async function onboardReport(root,{doctorAllImpl=doctorAll}={}){
+  const {providers}=await doctorAllImpl();
+  const lines=[
+    '# Project Swarm onboarding','',
+    '## What this does',
+    '- One coordinator (you or an agent) plans bounded tasks for fresh workers.',
+    '- Each worker gets copied context and explicit output ownership only.',
+    '- Workers cannot see each other, other projects, your terminal, or credentials.',
+    '- You review every proposed change before it is integrated.',
+    '- Integration checks (tests, format) run right after files are written.','',
+    '## Workers ready on this machine',
+    ...providers.map(provider=>{const r=agentReadiness(provider.agent,provider);return r.ready?`- ${provider.agent}: ready`:`- ${provider.agent}: needs setup — ${r.fix}`;}),
+    '',
+    '## Ask your agent for work like this',
+    '- "Use Project Swarm to review src/checkout.js for bugs; do not edit it."',
+    '- "Split the API and UI changes for issue #42 into two swarm jobs."',
+    '- "Run the smoke manifest and integrate it if the output looks right."','',
+    '## What a run looks like',
+    '1. Coordinator writes a manifest: one deliverable per job, one writer per file.',
+    '2. `swarm run` starts fresh workers in copied workspaces.',
+    '3. `swarm inspect`/`status` review proposed outputs and conflicts.',
+    '4. `swarm integrate` imports reviewed files and runs project checks.','',
+    '## Safety rules',
+    '- Workers only touch files explicitly listed in their job.',
+    '- No API keys or secrets are ever read from or written into a manifest.',
+    '- The Codex sandbox only runs on macOS; other platforms refuse codex jobs.','',
+    '## Staying current',
+    '- `node tools/swarm.mjs version --check` reports whether a newer release exists.',
+    '- Nothing updates itself: run `node tools/swarm.mjs update` to move to it.',
+    '- If old per-project copies are suspected, run `node tools/swarm.mjs update --projects`.'
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
 // Merges summarizeRun's snapshot with the fields it omits (agent/model/tier/tierReason,
 // declared output count) so `monitor --view` can render a full row without changing the
 // existing machine-readable monitor payload at all.
@@ -638,12 +815,50 @@ async function monitorView(root, id) {
   return { status: summary.status, text: renderMonitorView({ ...summary, jobs }, { width: process.stdout.columns || 100, color: supportsColor() }) };
 }
 
+// The install running this file, independent of --root: used to compare a linked project's
+// recorded version against the swarm actually executing it, never the project it targets.
+const ownRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+async function warnProjectVersionMismatch(root){
+  let pointer;
+  try{pointer=JSON.parse(await fs.readFile(path.join(root,'.project-swarm.json'),'utf8'));}catch{return;}
+  if(!pointer?.version)return;
+  let installedVersion;
+  try{installedVersion=JSON.parse(await fs.readFile(path.join(ownRoot,'package.json'),'utf8')).version;}catch{return;}
+  if(pointer.version!==installedVersion)process.stderr.write(`Warning: this project is linked to project-swarm ${pointer.version}, but the running install is ${installedVersion}; run \`swarm update\` in the install root to realign.\n`);
+}
+
 async function main() {
   const args=process.argv.slice(2);let root=path.join(path.dirname(fileURLToPath(import.meta.url)),'..');
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | inspect RUN | integrate RUN [--no-checks|--require-checks] | cancel RUN | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='version'){
+    const flags=args.slice(1);
+    if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
+    const result=await swarmVersion(root,{check:flags.includes('--check')});
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if(args[0]==='update'){
+    const flags=args.slice(1);
+    let yes=false,useProjects=false;const dirs=[];
+    for(let index=0;index<flags.length;index++){
+      const flag=flags[index];
+      if(flag==='--yes'){yes=true;continue;}
+      if(flag==='--projects'){useProjects=true;while(flags[index+1]&&flags[index+1]!=='--yes'){dirs.push(flags[++index]);}continue;}
+      fail('Invalid arguments; use --help');
+    }
+    root=await fs.realpath(root);
+    const result=useProjects?await updateProjects(root,{projects:dirs.length?dirs:undefined,yes}):await updateInstall(root);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if(args[0]==='onboard'){
+    if(args.length>1)fail('Invalid arguments; use --help');
+    process.stdout.write(await onboardReport(root));
+    return;
+  }
   const [command,argument,...rest]=args;
-  if(command==='--help'||command==='help'||!command){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | inspect RUN | integrate RUN [--no-checks|--require-checks] | cancel RUN\n');return;}
   // monitor keeps its JSON snapshot as the default; --view/--watch are read-only human rendering
   // extras consumed here so the generic argument-count check below still fails on anything else.
   let view=false,watchSeconds=null;
@@ -702,13 +917,10 @@ async function main() {
     return;
   }
   if(command==='doctor'){
-    if(argument==='all'){
-      const providers=[];
-      for(const agent of ['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS])try{providers.push({agent,...await doctor({agent})});}catch{providers.push({agent,status:'unavailable',liveVerified:false,note:'Provider compatibility check failed; run doctor for this provider for details.'});}
-      result={status:'report',providers};
-    }else result=await doctor({agent:argument??'claude'});
+    result=argument==='all'?await doctorAll():await doctor({agent:argument??'claude'});
   }
   else if(command==='run'||command==='validate'||command==='preflight'){
+    if(command==='run'||command==='validate')await warnProjectVersionMismatch(root);
     const bytes=await bytesAt(root,argument);if(!bytes)fail(`Missing manifest: ${argument}`);
     const manifest=JSON.parse(bytes);
     if(command==='preflight')result=await (await import('./preflight.mjs')).preflightProject(root,manifest);

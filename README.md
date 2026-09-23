@@ -8,6 +8,41 @@ It is designed for a human or coding agent acting as the coordinator. The coordi
 
 Codex CLI workers (`codex`) run in per-job git worktrees under a macOS seatbelt sandbox with an explicit model; see [provider setup](docs/providers.md). **The Codex sandbox is macOS-only** (it uses `sandbox-exec`): on Linux, WSL or Windows, `doctor codex` reports unsupported and `run` refuses codex jobs.
 
+## Install (for AI agents)
+
+If a user pastes this repository's URL and asks you to install it, follow these steps exactly. There is **one shared install per machine** at `~/.project-swarm` (override with the `PROJECT_SWARM_HOME` environment variable); every project on the machine links to it instead of getting its own copy.
+
+1. Check prerequisites: `node --version` must be 20.3 or newer, and `git --version` must succeed.
+2. Get the shared install onto the newest release:
+   - If `~/.project-swarm` does **not** exist yet:
+     ```sh
+     git clone https://github.com/Btabor11/project-swarm ~/.project-swarm
+     git -C ~/.project-swarm tag --list 'v*' --sort=-v:refname | head -1
+     git -C ~/.project-swarm checkout <the tag printed above>
+     ```
+   - If `~/.project-swarm` already exists, do not clone again; instead run:
+     ```sh
+     node ~/.project-swarm/tools/swarm.mjs update
+     ```
+3. Install the skill for every project on this machine:
+   ```sh
+   node ~/.project-swarm/tools/install.mjs --user
+   ```
+4. Check provider compatibility (no model call, no credentials created):
+   ```sh
+   node ~/.project-swarm/tools/swarm.mjs doctor all
+   ```
+5. Generate the onboarding summary and relay it to the user in plain words — what the swarm does, which providers are ready, how to ask for work, and what a run looks like:
+   ```sh
+   node ~/.project-swarm/tools/swarm.mjs onboard
+   ```
+6. Optional — link the current project so its `coordination/` examples exist and it resolves through the shared install:
+   ```sh
+   node ~/.project-swarm/tools/install.mjs /absolute/path/to/this/project
+   ```
+
+What never happens without the user explicitly asking: no API keys or credentials are ever created, read, or requested; `swarm update` never runs by itself (the skill only asks and waits for a yes); and an old per-project copy is never replaced until the user says yes to `update --projects --yes`.
+
 ## Start here
 
 You need **Node.js 20.3+**, macOS/Linux/WSL, and one configured provider. For Claude jobs, use an installed, authenticated **Claude Code CLI** supporting the restricted-mode flags. API jobs use environment credentials (or a local Ollama server), with no Claude installation required. Native Windows process cleanup is not supported.
@@ -42,29 +77,29 @@ A successful smoke run produces `coordination/swarm-handshake.md` after integrat
 
 ## Drop it into another project
 
-From this toolkit checkout:
+Project Swarm uses one shared install per machine (default `~/.project-swarm`, override with `PROJECT_SWARM_HOME`); projects no longer get their own copy of the runner, tests, or skill. Link a project to that install:
 
 ```sh
-node tools/install.mjs /absolute/path/to/your-project
+node ~/.project-swarm/tools/install.mjs /absolute/path/to/your-project
 ```
 
-The installer copies the runner, its core tests, the agent skill, example assignments, reference docs, and license notices. It checks every destination first and refuses to overwrite a different file. Reinstalling identical files is safe. It does not change package scripts, global settings, credentials, or the target's Git remote.
+This writes a small pointer file, `.project-swarm.json`, recording the install root and its version, and registers the project so `swarm update --projects` can find it later. It creates `coordination/` example manifests only if the project has none yet. It does not copy `tools/`, `tests/`, or `skills/` into the project, and does not change package scripts, global settings, credentials, or the target's Git remote.
 
-Add `.swarm/` to the target project's `.gitignore`. Then, in that project:
+Add `.swarm/` and `.project-swarm.json`'s sibling `.swarm-old-copy-*/` pattern to the target project's `.gitignore` if you track it. Then, in that project:
 
 ```sh
-node tools/swarm.mjs doctor
-node tools/swarm.mjs preflight coordination/swarm-smoke.json
-node tools/swarm.mjs run coordination/swarm-smoke.json
+node ~/.project-swarm/tools/swarm.mjs --root . doctor
+node ~/.project-swarm/tools/swarm.mjs --root . preflight coordination/swarm-smoke.json
+node ~/.project-swarm/tools/swarm.mjs --root . run coordination/swarm-smoke.json
 ```
 
-Alternatively, keep one toolkit checkout and explicitly select a target project:
+`--root` selects one explicit project; manifest filenames and all context/output paths resolve inside it, regardless of your shell's working directory. If a project's `.project-swarm.json` version no longer matches the installed version, `run`/`validate` print one warning to stderr — they still run; use `swarm update` in the install root to realign.
 
-```sh
-node /path/to/project-swarm/tools/swarm.mjs --root /path/to/project validate coordination/my-tasks.json
-```
+## Updating
 
-Manifest filenames and all context/output paths resolve inside the selected project. Without `--root`, the project is the parent of the installed `tools/` directory, regardless of your shell's working directory.
+`swarm update` moves the shared install itself to the newest release tag; it refuses if you have uncommitted changes in its own `tools/` or `skills/`, and prints `{from, to, changelog}` (or `{from, to, upToDate: true}` if already current). Run `swarm version --check` to see whether a newer tag exists without changing anything. Nothing updates itself: the skill checks once per session and only asks — it runs `update` after the user says yes, never on its own.
+
+Old per-project copies from before this shared-install model can be found and replaced with a pointer using `swarm update --projects`. Without `--yes` it only reports what it found; with `--yes` it writes the pointer and moves only the files the old installer copied in (the swarm's own `tools/*.mjs`, `tests/*.test.mjs`, `skills/project-swarm/` and `licenses/project-swarm/`; the project's own tools and tests stay) into a timestamped `.swarm-old-copy-*/` folder in that project rather than deleting them. It never touches `coordination/` or `.swarm/`.
 
 ## Ask your coding agent to coordinate
 
@@ -72,7 +107,7 @@ After installation, give the coordinator a prompt like:
 
 > Read `skills/project-swarm/SKILL.md`. Use Project Swarm to improve this feature. Split independent work into focused assignments, give each output one writer, review the workers' responses, integrate appropriate changes, and run the project's checks. Keep all work inside this repository.
 
-The skill is project-local and can be read explicitly. It is not automatically installed into a product's global skill-discovery directory. See [setup](docs/setup.md) for setup and sharing details.
+`node ~/.project-swarm/tools/install.mjs --user` installs the skill into every agent home whose parent directory exists (`~/.claude/skills/project-swarm/`, `~/.codex/skills/project-swarm/`), so a supporting agent can discover it automatically; otherwise read `skills/project-swarm/SKILL.md` explicitly. See [setup](docs/setup.md) for setup and sharing details.
 
 ## Ship smaller pieces
 
@@ -148,6 +183,9 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - `inspect <run-id>` — inspect proposed outputs and conflicts without importing.
 - `integrate <run-id>` — import reviewed, declared outputs from a successful run, then run the manifest's optional `checks` (format, tests) right after writing files; add `--no-checks` to skip them or `--require-checks` to fail the command when a check fails.
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
+- `version [--check]` — print `{version, installRoot, tag}`; with `--check`, also `latest`/`updateAvailable` from the `origin` remote's tags (or `checkError` if the remote can't be reached). No local files change.
+- `update [--projects [DIR...]] [--yes]` — move this shared install to the newest release tag and reinstall the skill; or, with `--projects`, find old per-project copies/stale pointers and replace them with a pointer only when `--yes` is given.
+- `onboard` — print a plain-language summary of what the swarm does, which providers are ready on this machine, and how to ask for work; generated from local `doctor` checks, no model call.
 - `--root <project>` — explicitly choose the project, before or after the command.
 
 ## Learn, modify, and share
