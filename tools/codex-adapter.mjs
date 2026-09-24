@@ -65,6 +65,15 @@ export function parseCodexResult(text, outputs) {
       value.files_changed.some(file => typeof file !== 'string' || !outputs.includes(file)) || new Set(value.files_changed).size !== value.files_changed.length) throw Error('Invalid Codex result envelope');
   return value;
 }
+const CODEX_FINAL_JSON = /\{[^{}]*"files_changed"[^{}]*\}/;
+// Lesson #41: a coordinator prompt that asks codex for extra final-JSON keys always fails
+// parseCodexResult's strict {files_changed,notes} envelope; validate should catch this early.
+export function codexExtraFinalJsonKeys(prompt) {
+  const match = CODEX_FINAL_JSON.exec(typeof prompt === 'string' ? prompt : '');
+  if (!match) return false;
+  const keys = [...match[0].matchAll(/"([a-zA-Z_][a-zA-Z0-9_]*)"\s*:/g)].map(m => m[1]);
+  return keys.some(key => key !== 'files_changed' && key !== 'notes');
+}
 export function codexUsage(output) {
   const matches = [...output.matchAll(/\btokens used\s*\n?\s*([0-9][0-9,]*)\s*(?=\n|$)/gi)];
   const count = Number(matches.at(-1)?.[1].replaceAll(',', ''));

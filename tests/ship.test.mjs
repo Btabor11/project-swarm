@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  ship, SHIP_DEFAULTS, CHECKS_PLACEHOLDER,
+  ship, SHIP_DEFAULTS, CHECKS_PLACEHOLDER, SWARM_MARKER_RE,
   parsePrPayload, isHeld, missingSections, renderChecks, fillChecks, summarizeRollup,
 } from '../tools/ship.mjs';
 
@@ -108,6 +108,31 @@ test('missingSections: content up to the next heading counts, not the whole body
   assert.deepEqual(missingSections(body, ['Section A', 'Section B']), []);
 });
 
+test('missingSections: a section holding only a swarm marker is missing', () => {
+  const body = '## Mutation check\n<!-- swarm:mutants -->';
+  assert.deepEqual(missingSections(body, ['Mutation check']), ['Mutation check']);
+});
+
+test('missingSections: a section with text and a leftover swarm marker is missing', () => {
+  const body = '## Mutation check\nSome content\n<!-- swarm:mutants -->';
+  assert.deepEqual(missingSections(body, ['Mutation check']), ['Mutation check']);
+});
+
+test('missingSections: a section with text and no marker passes', () => {
+  const body = '## Mutation check\nSome content';
+  assert.deepEqual(missingSections(body, ['Mutation check']), []);
+});
+
+test('missingSections: a non-swarm HTML comment does not count as a marker', () => {
+  const body = '## Notes\n<!-- note -->\nSome content';
+  assert.deepEqual(missingSections(body, ['Notes']), []);
+});
+
+test('missingSections: Checks section with CHECKS_PLACEHOLDER is missing', () => {
+  const body = `## Checks\n${CHECKS_PLACEHOLDER}`;
+  assert.deepEqual(missingSections(body, ['Checks']), ['Checks']);
+});
+
 test('renderChecks: passed/skipped omit exit code, failed shows exit code and up to last 20 tail lines', () => {
   const tail = Array.from({ length: 25 }, (_, i) => `line${i}`).join('\n');
   const rendered = renderChecks([
@@ -204,7 +229,28 @@ test('ship: refuses when a required section is missing after checks fill the pla
   const { exec, calls } = makeExec([clean(), rev('sha123')]);
   const result = await ship(baseOptions(root, payloadPath, { exec, requireSections: ['Mutation check'] }));
   assert.equal(result.status, 'refused');
+  assert.match(result.reason, /Mutation check/);
   assert.ok(!calls.some(c => c.file === 'git' && c.args[0] === 'push'));
+});
+
+test('ship: refuses with marker name when a section holds only a swarm marker', async t => {
+  const root = await fixture(t);
+  const payloadPath = await writePayload(root, payload({ body: '## Summary\ndone\n## Mutation check\n<!-- swarm:mutants -->' }));
+  const { exec } = makeExec([clean(), rev('sha123')]);
+  const result = await ship(baseOptions(root, payloadPath, { exec, requireSections: ['Mutation check'] }));
+  assert.equal(result.status, 'refused');
+  assert.match(result.reason, /Mutation check/);
+  assert.match(result.reason, /mutants/);
+});
+
+test('ship: refuses with marker name when a section has text plus a leftover marker', async t => {
+  const root = await fixture(t);
+  const payloadPath = await writePayload(root, payload({ body: '## Summary\ndone\n## Checks\nSome text\n<!-- swarm:mutants -->' }));
+  const { exec } = makeExec([clean(), rev('sha123')]);
+  const result = await ship(baseOptions(root, payloadPath, { exec, requireSections: ['Checks'] }));
+  assert.equal(result.status, 'refused');
+  assert.match(result.reason, /Checks/);
+  assert.match(result.reason, /mutants/);
 });
 
 test('ship: refuses when the push fails, naming the step and stderr', async t => {

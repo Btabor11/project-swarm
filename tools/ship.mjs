@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 
 export const SHIP_DEFAULTS = Object.freeze({ pollMs: 20_000, timeoutMs: 45 * 60_000, noCiGraceMs: 5 * 60_000, mergeMethod: 'squash' });
 export const CHECKS_PLACEHOLDER = '<!-- swarm:checks -->';
+export const SWARM_MARKER_RE = /<!-- swarm:[a-z0-9_-]+ -->/g;
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const HEAD_RE = /^[A-Za-z0-9._\/-]{1,200}$/;
@@ -22,6 +23,19 @@ function firstStderrLine(stderr) {
 
 function stepFailed(step, res) {
   return `${step} failed: ${firstStderrLine(res.stderr)}`;
+}
+
+function getMarkerForSection(body, sectionName) {
+  const lines = String(body ?? '').split('\n');
+  const at = lines.findIndex(line => line === `## ${sectionName}`);
+  if (at === -1) return null;
+  const nextHeading = lines.slice(at + 1).findIndex(line => line.startsWith('## '));
+  const end = nextHeading === -1 ? lines.length : at + 1 + nextHeading;
+  const content = lines.slice(at + 1, end).join('\n');
+  const matches = content.match(SWARM_MARKER_RE);
+  if (!matches) return null;
+  const markerMatch = matches[0].match(/swarm:([a-z0-9_-]+)/);
+  return markerMatch ? markerMatch[1] : null;
 }
 
 export function parsePrPayload(text) {
@@ -62,7 +76,9 @@ export function missingSections(body, names) {
     if (at === -1) { missing.push(name); continue; }
     const end = at + 1 < headings.length ? headings[at + 1].index : lines.length;
     const content = lines.slice(headings[at].index + 1, end).join('\n');
-    if (content.trim() === '' || content.includes(CHECKS_PLACEHOLDER)) missing.push(name);
+    const withoutMarkers = content.replace(SWARM_MARKER_RE, '').trim();
+    const markerMatches = content.match(SWARM_MARKER_RE);
+    if (withoutMarkers === '' || markerMatches) missing.push(name);
   }
   return missing;
 }
@@ -146,7 +162,13 @@ export async function ship(options) {
   if (checks.some(result => result.status === 'failed')) return { ...base, status: 'checks-failed', reason: 'checks failed' };
 
   const missing = missingSections(body, requireSections);
-  if (missing.length > 0) return { ...base, status: 'refused', reason: `missing sections: ${missing.join(', ')}` };
+  if (missing.length > 0) {
+    const reasons = missing.map(section => {
+      const marker = getMarkerForSection(body, section);
+      return marker ? `${section} (leftover: ${marker})` : section;
+    });
+    return { ...base, status: 'refused', reason: `missing sections: ${reasons.join(', ')}` };
+  }
 
   const pushRes = await exec('git', ['push', 'origin', `HEAD:refs/heads/${payload.head}`], { cwd: root });
   if (pushRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('push', pushRes) };

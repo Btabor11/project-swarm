@@ -127,7 +127,7 @@ test('HEAD worktree runs with null stdin, collects only declared outputs, integr
   await assert.rejects(fs.access(path.join(root, 'extra.txt')));
 });
 
-for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}`, async t => {
+for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope which is kept (lesson #41)`, async t => {
   const root = await fixture(t);
   let launched = false;
   const controller = new AbortController();
@@ -147,7 +147,17 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
   assert.equal(launched, true);
   assert.equal(state.jobs[0].status, ['timeout', 'cancelled'].includes(scenario) ? scenario : 'failed');
   if (['timeout', 'cancelled'].includes(scenario)) assert.ok(signals.some(call => call.pid < 0 && call.signal === 'SIGTERM'));
-  await removed(root, state);
+  const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/writer');
+  if (scenario === 'malformed') {
+    // A clean exit with an invalid final envelope is the only evidence of what codex did; keep it.
+    await fs.access(worktree);
+    assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(worktree), true);
+    assert.equal(state.jobs[0].keptWorkspace, worktree);
+    assert.equal(state.jobs[0].error, `envelope invalid; worktree kept at ${worktree}`);
+  } else {
+    await removed(root, state);
+    assert.equal(state.jobs[0].keptWorkspace, null);
+  }
   await assert.rejects(integrateRun(root, state.id));
   assert.deepEqual(await fs.readdir(path.join(root, state.jobs[0].workspace)), []);
 });
@@ -158,6 +168,14 @@ test('Codex proposals retain ordinary conflict detection', async t => {
   await fs.writeFile(path.join(root, 'output.txt'), 'coordinator edit');
   assert.equal((await inspectRun(root, state.id)).files[0].status, 'conflict');
   await assert.rejects(integrateRun(root, state.id), /Integration conflict/);
+});
+
+test('validate warns when a codex prompt asks for final-JSON keys beyond files_changed and notes (lesson #41)', async t => {
+  const root = await fixture(t);
+  const withExtra = manifest({ prompt: 'Finish with one JSON line {"files_changed":[...],"summary":"what you did"}.' });
+  assert.deepEqual((await validateProject(root, withExtra)).warnings, [{ code: 'codex-extra-final-keys', jobId: 'writer', message: 'codex job writer: final JSON may only hold files_changed and notes; put extra fields inside notes' }]);
+  const onlyDeclared = manifest({ prompt: 'Finish with one JSON line {"files_changed":[...],"notes":[...]}.' });
+  assert.deepEqual((await validateProject(root, onlyDeclared)).warnings, []);
 });
 
 test('validate and preflight warn about staged, unstaged, untracked and ignored declared paths only', async t => {

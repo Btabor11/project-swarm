@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, claudeArgs, shipRun, shipExitCode, parseShipFlags } from '../tools/swarm.mjs';
+import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, claudeArgs, shipRun, shipExitCode, parseShipFlags, waitRun, inspectRun, inspectResults, askRun } from '../tools/swarm.mjs';
 
 const execFileAsync = promisify(execFile);
 const CLI = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -562,4 +562,112 @@ test('CLI ship requires --repo and --pr', async t => {
     assert.match(JSON.parse(error.stderr).error, /requires --repo/);
     return true;
   });
+});
+
+// --- lesson #46: root cause, actualModel/modelsSeen/modelMismatch, and warnings ------------
+
+test('read-only jobs use permission-mode default and never plan (lesson #46 root cause)', () => {
+  const args = claudeArgs(job({ outputs: [] }));
+  assert.equal(args[args.indexOf('--permission-mode') + 1], 'default');
+  assert.equal(args.includes('plan'), false);
+  assert.equal(claudeArgs(job({ outputs: ['input.txt'] }))[args.indexOf('--permission-mode') + 1], 'acceptEdits');
+});
+
+const initEvent = model => JSON.stringify({ type: 'system', subtype: 'init', model });
+const assistantEvent = model => JSON.stringify({ type: 'assistant', message: { model, content: [] } });
+const resultEvent = costUsd => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: costUsd });
+
+test('actualModel comes from assistant events, not just init, and modelMismatch drives a wait/inspect warning', async t => {
+  const root = await fixture(t);
+  const script = `fs.writeFileSync('input.txt','updated');console.log(${JSON.stringify(initEvent('claude-haiku-4-5-20251001'))});console.log(${JSON.stringify(assistantEvent('claude-sonnet-5-20260101'))});console.log(${JSON.stringify(resultEvent(0.02))});`;
+  const state = await runManifest(root, manifest([job({ model: 'haiku' })]), { spawnImpl: fake(script) });
+  assert.equal(state.jobs[0].actualModel, 'claude-sonnet-5-20260101');
+  assert.deepEqual(state.jobs[0].modelsSeen, ['claude-haiku-4-5-20251001', 'claude-sonnet-5-20260101']);
+  assert.equal(state.jobs[0].modelMismatch, true);
+  const warning = 'model mismatch: writer asked haiku, ran claude-sonnet-5-20260101';
+  assert.deepEqual((await waitRun(root, state.id)).warnings, [warning]);
+  assert.deepEqual((await inspectRun(root, state.id)).warnings, [warning]);
+});
+
+test('a matching model stream reports no mismatch and no warning', async t => {
+  const root = await fixture(t);
+  const script = `fs.writeFileSync('input.txt','updated');console.log(${JSON.stringify(initEvent('claude-sonnet-5-20260101'))});console.log(${JSON.stringify(assistantEvent('claude-sonnet-5-20260101'))});${done}`;
+  const state = await runManifest(root, manifest([job({ model: 'sonnet' })]), { spawnImpl: fake(script) });
+  assert.equal(state.jobs[0].modelMismatch, false);
+  assert.deepEqual((await waitRun(root, state.id)).warnings, []);
+  assert.deepEqual((await inspectRun(root, state.id)).warnings, []);
+});
+
+test('a short model alias matches any assistant id containing it, so haiku vs claude-haiku-4-5 is not a mismatch', async t => {
+  const root = await fixture(t);
+  const script = `fs.writeFileSync('input.txt','updated');console.log(${JSON.stringify(initEvent('claude-haiku-4-5-20251001'))});console.log(${JSON.stringify(assistantEvent('claude-haiku-4-5-20251001'))});${done}`;
+  const state = await runManifest(root, manifest([job({ model: 'haiku' })]), { spawnImpl: fake(script) });
+  assert.equal(state.jobs[0].modelMismatch, false);
+});
+
+// --- lesson #48: ask, and inspect --results -------------------------------------------------
+
+test('ask refuses without --model, --context, or a non-empty question', async t => {
+  const root = await fixture(t);
+  await assert.rejects(askRun(root, { context: ['input.txt'], question: 'What next?' }), /requires --model/);
+  await assert.rejects(askRun(root, { model: 'sonnet', question: 'What next?' }), /requires --context/);
+  await assert.rejects(askRun(root, { model: 'sonnet', context: ['input.txt'], question: '   ' }), /non-empty question/);
+});
+
+test('ask refuses codex as its agent', async t => {
+  const root = await fixture(t);
+  await assert.rejects(askRun(root, { model: 'test-model', context: ['input.txt'], agent: 'codex', question: 'What next?' }), /not codex/);
+});
+
+test('ask builds a read-only job, runs it like run, and returns the contract-shaped result with a fake claude CLI', async t => {
+  const root = await fixture(t);
+  const answer = JSON.stringify({ answer: 'yes' });
+  const script = `console.log(${JSON.stringify(initEvent('claude-sonnet-5-20260101'))});console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(answer)},total_cost_usd:0.03}));`;
+  const result = await askRun(root, { model: 'sonnet', context: ['input.txt'], question: 'Should we ship?' }, { spawnImpl: fake(script) });
+  assert.deepEqual(Object.keys(result).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status'].sort());
+  assert.equal(result.status, 'complete');
+  assert.equal(result.model, 'sonnet');
+  assert.equal(result.actualModel, 'claude-sonnet-5-20260101');
+  assert.equal(result.modelMismatch, false);
+  assert.equal(result.costUsd, 0.03);
+  assert.deepEqual(result.result, { answer: 'yes' });
+});
+
+test('CLI ask prints exactly one JSON line with the contract keys and exits 0, using a fake claude CLI on PATH', async t => {
+  const root = await fixture(t);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-fake-claude-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const answer = JSON.stringify(JSON.stringify({ answer: 'ok' }));
+  await fs.writeFile(path.join(dir, 'claude'), `#!/usr/bin/env node\nconsole.log(${JSON.stringify(initEvent('claude-sonnet-5-20260101'))});\nconsole.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${answer}}));\n`, { mode: 0o755 });
+  const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'ask', '--model', 'sonnet', '--context', 'input.txt', 'Should we ship?'], { env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}` } });
+  const lines = stdout.trim().split('\n');
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.deepEqual(Object.keys(parsed).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status'].sort());
+  assert.equal(parsed.status, 'complete');
+});
+
+test('inspect --results prints only the contract shape', async t => {
+  const root = await fixture(t);
+  const resultLine = JSON.stringify({ files_changed: ['input.txt'], notes: ['done'] });
+  const script = `fs.writeFileSync('input.txt','updated');console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(resultLine)},total_cost_usd:0.1}));`;
+  const state = await runManifest(root, manifest(), { spawnImpl: fake(script) });
+  const report = await inspectResults(root, state.id);
+  assert.deepEqual(Object.keys(report).sort(), ['jobs', 'runId', 'status', 'warnings'].sort());
+  assert.equal(report.runId, state.id);
+  assert.equal(report.status, 'complete');
+  assert.deepEqual(report.warnings, []);
+  assert.equal(report.jobs.length, 1);
+  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status'].sort());
+  assert.equal(report.jobs[0].id, 'writer');
+  assert.equal(report.jobs[0].costUsd, 0.1);
+  assert.deepEqual(report.jobs[0].result, { files_changed: ['input.txt'], notes: ['done'] });
+});
+
+test('CLI inspect --results prints only the reduced contract shape', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest(), { spawnImpl: update });
+  const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'inspect', state.id, '--results']);
+  const parsed = JSON.parse(stdout);
+  assert.deepEqual(Object.keys(parsed).sort(), ['jobs', 'runId', 'status', 'warnings'].sort());
 });

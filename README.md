@@ -165,9 +165,10 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 ## Commands
 
 - `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all]` — check compatibility or environment configuration; no model call. Omitted provider means Claude.
-- `validate <manifest>` — check schema, paths, files, and size limits; no run or model call.
+- `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
 - `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange.
+- `ask --model M --context f1,f2,... [--agent claude] [--timeout S] "question"` — build and run one read-only job in memory, wait for it, and print `{"id","status","model","actualModel","modelMismatch","costUsd","result"}` (`result` is the worker's parsed final JSON, or `null` plus `error`). Refuses with no `--model`, no `--context`, or an empty question; `--agent` defaults to `claude` and never allows `codex`. See [the manifest reference](docs/manifest-reference.md#ask).
 - `status <run-id>` — read progress, errors, and model metadata.
 - `monitor <run-id>` — concise snapshot of queued/running/completed jobs, observed peak concurrency, timings, numeric usage, and content-free CLI output counters. Silence is not proof that a worker is stuck. Add `--view` for a human-readable table instead of JSON, and `--watch [seconds]` to keep it redrawing in place (read-only) until the run finishes:
 
@@ -180,7 +181,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
   # render-review   claude  sonnet  mid   + done      12s    1
   # scroll-anim     claude  -       -     > running    9s    1
   ```
-- `inspect <run-id>` — inspect proposed outputs and conflicts without importing.
+- `inspect <run-id>` — inspect proposed outputs and conflicts without importing; carries a top-level `warnings` array noting any job whose reported model didn't match what was requested. Add `--results` to print just `{"runId","status","warnings":[...],"jobs":[{"id","status","model","actualModel","modelMismatch","costUsd","result"}]}` and nothing else.
 - `integrate <run-id>` — import reviewed, declared outputs from a successful run, then run the manifest's optional `checks` (format, tests) right after writing files; add `--no-checks` to skip them or `--require-checks` to fail the command when a check fails.
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
 - `ship <run-id> --repo OWNER/NAME --pr payload.json` — for an already-integrated run: push its branch, open or update the pull request, re-run the manifest's `checks` and fill them into the PR body, wait for CI, and merge once green. Refuses on a dirty tree, a failed check, a missing required `--require-section`, or a rejected push; never merges a PR body that opens with a `**needs ` human-review marker. Add `--no-merge` to stop at a green `ready` state, `--merge-method squash|merge|rebase` (default `squash`), or `--timeout`/`--poll` (seconds) to tune CI waiting. See [the manifest reference](docs/manifest-reference.md#ship).

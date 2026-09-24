@@ -21,6 +21,31 @@ test('CLI arguments keep no-tools restrictions and avoid resume, yolo, shell and
  const qwen=extraCliArgs(job('qwen'));assert.equal(qwen[qwen.indexOf('--max-tool-calls')+1],'0');assert.equal(qwen.includes('--json-schema'),false);assert.equal(qwen.includes('--resume'),false);assert.equal(qwen.includes('--yolo'),false);
  const hermes=extraCliArgs(job('hermes'));assert.equal(hermes[hermes.indexOf('--toolsets')+1],'none');assert.equal(hermes[hermes.indexOf('--query-file')+1],'-');assert.ok(hermes.includes('--ignore-rules'));
 });
+test('parseExtraCli derives actualModel from assistant events (not just init) and flags a mismatch against the requested model',()=>{
+ const withAssistant=agent=>[
+  {type:'system',subtype:'init',model:'claude-haiku-4-5-20251001'},
+  {type:'assistant',message:{model:'claude-sonnet-5-20260101',content:[]}},
+  agent==='hermes'?{type:'result',exit_code:0,text:JSON.stringify(value)}:{type:'result',subtype:'success',is_error:false,result:JSON.stringify(value)},
+ ];
+ for(const agent of ['hermes','qwen']){
+  const parsed=parseExtraCli(agent,lines(withAssistant(agent)),0,'haiku');
+  assert.equal(parsed.actualModel,'claude-sonnet-5-20260101');
+  assert.deepEqual(parsed.modelsSeen,['claude-haiku-4-5-20251001','claude-sonnet-5-20260101']);
+  assert.equal(parsed.modelMismatch,true);
+ }
+});
+test('parseExtraCli reports no mismatch for a matching model, and a short alias matches any id containing it',()=>{
+ const matching=agent=>[
+  {type:'system',subtype:'init',model:'claude-haiku-4-5-20251001'},
+  {type:'assistant',message:{model:'claude-haiku-4-5-20251001',content:[]}},
+  agent==='hermes'?{type:'result',exit_code:0,text:JSON.stringify(value)}:{type:'result',subtype:'success',is_error:false,result:JSON.stringify(value)},
+ ];
+ for(const agent of ['hermes','qwen']){
+  const parsed=parseExtraCli(agent,lines(matching(agent)),0,'haiku');
+  assert.equal(parsed.actualModel,'claude-haiku-4-5-20251001');
+  assert.equal(parsed.modelMismatch,false);
+ }
+});
 test('CLI result parser fails closed on tools, duplicate/missing results, nonzero exit and malformed output',()=>{
  for(const agent of ['hermes','qwen']){const good=events(agent);assert.equal(parseExtraCli(agent,lines(good),0).actualModel,'observed-model');for(const bad of [[...good,good.at(-1)],[good[0]],[good[0],{type:'tool_use',name:'shell'},good[1]],[good[0],{type:'assistant',message:{content:[{type:'tool_use',name:'agent'}]}},good[1]]])assert.throws(()=>parseExtraCli(agent,lines(bad),0));assert.throws(()=>parseExtraCli(agent,'not json',0));assert.throws(()=>parseExtraCli(agent,lines(good),3));}
  assert.throws(()=>parseExtraCli('hermes',lines([{type:'result',exit_code:1,text:'x'}]),0));assert.throws(()=>parseExtraCli('qwen',lines([{type:'result',subtype:'success',is_error:true,result:'x'}]),0));
