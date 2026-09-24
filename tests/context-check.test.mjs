@@ -11,6 +11,7 @@ import {
   referencePatterns,
   listProjectFiles,
   findUncoveredTests,
+  suggestIgnoreTests,
 } from '../tools/context-check.mjs';
 
 async function fixture(t) {
@@ -147,4 +148,73 @@ test('listProjectFiles: walks a plain directory and skips reserved/build directo
   const files = listProjectFiles(root);
   assert.ok(files.includes('src/main.js'));
   assert.equal(files.some(f => f.startsWith('node_modules/')), false);
+});
+
+test('findUncoveredTests: package.json output with test importing the package is not refused', async t => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'package.json'), '{"name":"myapp"}');
+  await fs.mkdir(path.join(root, 'tests'));
+  await fs.writeFile(path.join(root, 'tests', 'integration.test.mjs'), "import { Something } from 'myapp';");
+  const job = { id: 'w', context: [], outputs: ['package.json'] };
+  const found = findUncoveredTests(root, job);
+  assert.deepEqual(found, []);
+});
+
+test('findUncoveredTests: pyproject.toml output with test is not refused', async t => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'pyproject.toml'), '[tool.poetry]');
+  await fs.mkdir(path.join(root, 'tests'));
+  await fs.writeFile(path.join(root, 'tests', 'test_main.py'), 'import mymodule');
+  const job = { id: 'w', context: [], outputs: ['pyproject.toml'] };
+  const found = findUncoveredTests(root, job);
+  assert.deepEqual(found, []);
+});
+
+test('findUncoveredTests: __init__.py output with test is not refused', async t => {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, 'src', 'pkg'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src', 'pkg', '__init__.py'), '# init');
+  await fs.mkdir(path.join(root, 'tests'));
+  await fs.writeFile(path.join(root, 'tests', 'test_pkg.py'), 'import src.pkg');
+  const job = { id: 'w', context: [], outputs: ['src/pkg/__init__.py'] };
+  const found = findUncoveredTests(root, job);
+  assert.deepEqual(found, []);
+});
+
+test('findUncoveredTests: real module output still refuses uncovered test', async t => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'widget.mjs'), 'export const widget = 1;');
+  await fs.mkdir(path.join(root, 'tests'));
+  await fs.writeFile(path.join(root, 'tests', 'widget.test.mjs'), "import { widget } from '../widget.mjs';");
+  const job = { id: 'w', context: [], outputs: ['widget.mjs'] };
+  const found = findUncoveredTests(root, job);
+  assert.deepEqual(found, [{ output: 'widget.mjs', test: 'tests/widget.test.mjs' }]);
+});
+
+test('suggestIgnoreTests: groups uncovered tests by job id exactly and sorts', async t => {
+  const uncovered = [
+    { job: 'j1', output: 'a.mjs', test: 'tests/z.test.mjs' },
+    { job: 'j1', output: 'b.mjs', test: 'tests/a.test.mjs' },
+    { job: 'j2', output: 'c.mjs', test: 'tests/m.test.mjs' },
+    { job: 'j1', output: 'a.mjs', test: 'tests/z.test.mjs' },
+  ];
+  const result = suggestIgnoreTests(uncovered);
+  assert.deepEqual(result, {
+    j1: ['tests/a.test.mjs', 'tests/z.test.mjs'],
+    j2: ['tests/m.test.mjs'],
+  });
+});
+
+test('validateProject refusal carries suggestedIgnoreTests grouped by job (lesson #47)', async t => {
+  const { validateProject } = await import('../tools/swarm.mjs');
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'widget.mjs'), 'export const widget = 1;');
+  await fs.mkdir(path.join(root, 'tests'));
+  await fs.writeFile(path.join(root, 'tests', 'widget.test.mjs'), "import { widget } from '../widget.mjs';");
+  const manifest = { version: 1, jobs: [{ id: 'w', agent: 'claude', model: 'claude-haiku-4-5', prompt: 'edit widget', context: [], outputs: ['widget.mjs'] }] };
+  await assert.rejects(validateProject(root, manifest), error => {
+    assert.match(error.message, /Uncovered test references/);
+    assert.deepEqual(error.details, { suggestedIgnoreTests: { w: ['tests/widget.test.mjs'] } });
+    return true;
+  });
 });

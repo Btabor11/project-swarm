@@ -72,6 +72,7 @@ node tools/swarm.mjs doctor all
 node tools/swarm.mjs doctor openai
 node tools/swarm.mjs validate examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
+node tools/swarm.mjs ask --model sonnet --context src/a.js,src/b.js "question"
 node tools/swarm.mjs status <run-id>
 node tools/swarm.mjs monitor <run-id>
 node tools/swarm.mjs monitor <run-id> --view
@@ -79,6 +80,7 @@ node tools/swarm.mjs monitor <run-id> --view --watch 5
 node tools/swarm.mjs wait <run-id>
 node tools/swarm.mjs wait <run-id> --timeout 300
 node tools/swarm.mjs inspect <run-id>
+node tools/swarm.mjs inspect <run-id> --results
 node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
@@ -94,7 +96,17 @@ Use `--root /path/to/project` to select a project explicitly. Otherwise the runn
 
 `inspect` additionally reports, per job, `result` — the worker's own final JSON-object line from its saved response (whatever keys it wrote, or `null` if no line parses as a JSON object) — and `costUsd` (a number when the provider reported one, else `null`). A `result.notes` array, if present, is capped at 20 entries of at most 500 characters each in the printed report; this is display data from the worker, never executed or trusted.
 
-`wait <run-id> [--timeout SECONDS]` blocks, polling saved run status at most once a second, until the run reaches a terminal status (`complete`, `failed`, or `cancelled`); with no `--timeout` it waits indefinitely. It prints one compact JSON line, `{runId, status, durationMs, costUsd, jobs: [{id, status, costUsd, notes}]}`, where `costUsd` is the sum of the jobs' recorded provider costs when any are available, else `null`, and each job's `notes` come from the same final-JSON-line parsing as `inspect` (capped the same way). Exit code is `0` for `complete`, `1` for `failed`/`cancelled` (or an unknown run id), and `2` if `--timeout` expires first — in that case `status` in the printed line is still `running`.
+Each job record also carries `actualModel` (the model behind most of its `assistant` events, falling back to the init-reported model, then `null`), `modelsSeen` (every distinct valid model id observed across init and assistant events, in first-seen order), and `modelMismatch` (`true` when an assistant-event model does not match the requested `model`, using alias matching: a requested `haiku`/`sonnet`/`opus`/`fable` matches any id containing that word, otherwise the id must equal or start with the request). Both plain `inspect` and `wait` add a top-level `warnings` array with one string per mismatched job, `model mismatch: <job id> asked <requested>, ran <actualModel>`; the job itself is not failed for it. Add `--results` to `inspect <run-id>` to print only `{"runId","status","warnings":[...],"jobs":[{"id","status","model","actualModel","modelMismatch","costUsd","result"}]}` and nothing else.
+
+`wait <run-id> [--timeout SECONDS]` blocks, polling saved run status at most once a second, until the run reaches a terminal status (`complete`, `failed`, or `cancelled`); with no `--timeout` it waits indefinitely. It prints one compact JSON line, `{runId, status, durationMs, costUsd, warnings, jobs: [{id, status, costUsd, notes}]}`, where `costUsd` is the sum of the jobs' recorded provider costs when any are available, else `null`, `warnings` lists any model-mismatch strings (see above), and each job's `notes` come from the same final-JSON-line parsing as `inspect` (capped the same way). Exit code is `0` for `complete`, `1` for `failed`/`cancelled` (or an unknown run id), and `2` if `--timeout` expires first — in that case `status` in the printed line is still `running`.
+
+## Ask
+
+`ask --model M --context f1,f2,... [--agent claude] [--timeout S] "question"` builds one read-only job in memory — `id: ask-<timestamp>`, empty `outputs`, the given `context`, and the question plus a fixed suffix asking for one final JSON line — runs it like `run`, waits for it, and prints exactly one JSON line: `{"id","status","model","actualModel","modelMismatch","costUsd","result"}`, where `result` is the worker's parsed final JSON (or `null` plus `error`). It refuses with no `--model`, no `--context`, or an empty question. Exit code is `0` when the job completes, `1` otherwise. `--agent` defaults to `claude`; only `claude` and API agents are allowed, never `codex`. The run is saved under `.swarm/runs/` like any other run.
+
+```sh
+node tools/swarm.mjs ask --model haiku --context src/renderer.js "Any obvious performance bug here?"
+```
 
 After installing into a project, use `coordination/swarm-smoke.json` and `coordination/swarm-parallel-review.json` in place of the standalone checkout's `examples/` paths. `--root` may appear before or after the command.
 
@@ -185,7 +197,7 @@ The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs",
 
 ## Context check
 
-`validate` and `run` (which validates first) check, for every job, whether an already-existing declared output is referenced by a project test file that is not in that job's `context`, `outputs`, or `ignoreTests`. This catches a worker changing an output's behavior without ever seeing the test that asserts it. The check is advisory static text matching — a project file walk (or `git ls-files` in a git work tree) plus a regexp match against each candidate output's stem — not a dependency graph: it can miss an indirect reference and, rarely, flag a coincidental one. A finding fails validation, naming the job, the output, and the test: add the test to `context`, or list it in `ignoreTests` with a reason in the job's `prompt`.
+`validate` and `run` (which validates first) check, for every job, whether an already-existing declared output is referenced by a project test file that is not in that job's `context`, `outputs`, or `ignoreTests`. This catches a worker changing an output's behavior without ever seeing the test that asserts it. The check is advisory static text matching — a project file walk (or `git ls-files` in a git work tree) plus a regexp match against each candidate output's stem — not a dependency graph: it can miss an indirect reference and, rarely, flag a coincidental one. A reference from a test to a package manifest or version-only file — `package.json`, `package-lock.json`, `pyproject.toml`, `uv.lock`, `Cargo.toml`, `Cargo.lock`, or any `__init__.py` — never counts. A finding fails validation, naming the job, the output, and the test: add the test to `context`, or list it in `ignoreTests` with a reason in the job's `prompt`. The refusal JSON also carries `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}`, listing exactly the uncovered tests per job so the coordinator can paste them in.
 
 ## Ship
 

@@ -9,11 +9,11 @@ import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope } from './cli-adapters.mjs';
+import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters.mjs';
 
-import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, parseCodexResult, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
-import { findUncoveredTests, listProjectFiles } from './context-check.mjs';
+import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, parseCodexResult, codexExtraFinalJsonKeys, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
+import { findUncoveredTests, listProjectFiles, suggestIgnoreTests } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS } from './ship.mjs';
 
 const MAX_CONTEXT = 32 * 1024 * 1024;
@@ -175,7 +175,9 @@ export function validateManifest(manifest) {
 }
 
 export function claudeArgs(job) {
-  return ['-p', '--restricted', '--safe-mode', '--tools', job.outputs.length ? 'Read,Glob,Grep,Write,Edit' : 'Read,Glob,Grep', '--permission-mode', job.outputs.length ? 'acceptEdits' : 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--no-chrome', '--output-format', 'stream-json', '--verbose', ...(job.model ? ['--model', job.model] : [])];
+  // Lesson #46 root cause: plan mode let a haiku-requested job run as sonnet for every event.
+  // A read-only job (no outputs) gets no edit tools either way, so default mode is enough.
+  return ['-p', '--restricted', '--safe-mode', '--tools', job.outputs.length ? 'Read,Glob,Grep,Write,Edit' : 'Read,Glob,Grep', '--permission-mode', job.outputs.length ? 'acceptEdits' : 'default', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--no-chrome', '--output-format', 'stream-json', '--verbose', ...(job.model ? ['--model', job.model] : [])];
 }
 
 export function stopChild(child, { killImpl = process.kill.bind(process) } = {}) {
@@ -275,26 +277,28 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       const cleanupError=cleanup.error;
       if(cleanupError){child?.unref();child?.stdin?.destroy();child?.stdout?.destroy();child?.stderr?.destroy();}
       if(job.agent === 'codex') {
-        let response = '', failed = cleanupError || reason || error?.message || (code !== 0 ? `Codex exited ${code}` : null);
+        let response = '', envelopeInvalid = false, failed = cleanupError || reason || error?.message || (code !== 0 ? `Codex exited ${code}` : null);
         if (!failed) try {
           response = (await bytesAt(cwd, codex.resultRelative, true))?.toString('utf8') ?? '';
           parseCodexResult(response, job.outputs);
-        } catch (problem) { failed = problem.message; }
-        resolve({ cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, stdout, stderr, response, exitCode: code, actualModel: null, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
+        } catch (problem) { failed = problem.message; envelopeInvalid = true; }
+        resolve({ cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, stdout, stderr, response, exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
         return;
       }
       if(EXTRA_CLI_AGENTS.includes(job.agent)){
         let parsed, failed=cleanupError||reason||(error?'CLI launch failed':null),files=[],response='';
-        if(!failed)try{parsed=parseExtraCli(job.agent,stdout,code);const value=validateEnvelope(parsed.value,job.outputs);files=value.files;response=value.summary;}catch(problem){failed=problem.message;}
-        resolve({cleanupError,terminationReason:reason??null,status:cleanupError?'failed':reason==='timeout'?'timeout':reason==='cancelled'?'cancelled':failed?'failed':'complete',error:failed??null,files,response,stdout:failed?'':JSON.stringify({type:'result',provider:job.agent,status:'complete',actualModel:parsed.actualModel,usage:parsed.usage})+'\n',stderr:'',exitCode:code,actualModel:parsed?.actualModel??null,usage:parsed?.usage??null,modelUsage:null,costUsd:null});return;
+        if(!failed)try{parsed=parseExtraCli(job.agent,stdout,code,job.model);const value=validateEnvelope(parsed.value,job.outputs);files=value.files;response=value.summary;}catch(problem){failed=problem.message;}
+        resolve({cleanupError,terminationReason:reason??null,status:cleanupError?'failed':reason==='timeout'?'timeout':reason==='cancelled'?'cancelled':failed?'failed':'complete',error:failed??null,files,response,stdout:failed?'':JSON.stringify({type:'result',provider:job.agent,status:'complete',actualModel:parsed.actualModel,usage:parsed.usage})+'\n',stderr:'',exitCode:code,actualModel:parsed?.actualModel??null,modelsSeen:parsed?.modelsSeen??[],modelMismatch:parsed?.modelMismatch??false,usage:parsed?.usage??null,modelUsage:null,costUsd:null});return;
       }
-      let result, parseError, actualModel;
+      let result, parseError; const events=[];
       for (const line of stdout.split('\n').filter(Boolean)) {
-        try { const event = JSON.parse(line); if (event.type === 'result') result = event; if(event.type === 'system' && event.subtype === 'init') actualModel=event.model; }
+        try { const event = JSON.parse(line); events.push(event); if (event.type === 'result') result = event; }
         catch { parseError = 'Malformed provider JSONL'; }
       }
+      // Lesson #46: init only reports the requested model, not what actually ran.
+      const { actualModel, modelsSeen, modelMismatch } = summarizeModels(events, job.model);
       const failed = cleanupError || reason || error?.message || (code !== 0 ? `Worker exited ${code}` : null) || parseError || (!result ? 'Worker returned no result event' : null) || (result?.is_error || (result?.subtype && result.subtype !== 'success') ? `Worker result: ${result.subtype || 'error'}` : null) || (result?.permission_denials?.length ? 'Worker encountered permission denials' : null);
-      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: result?.total_cost_usd ?? null });
+      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: result?.total_cost_usd ?? null });
     };
     if (signal?.aborted) { reason = 'cancelled'; return finish(null); }
     try {
@@ -331,7 +335,7 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
 async function executeCodexJob(root, directory, job, proposalRoot, options) {
   const worktree = await safePath(root, `${directory}/worktrees/${job.id}`, { internal: true, parents: true });
   const commonDir = await fs.realpath((await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
-  let added = false;
+  let added = false, keepWorktree = false;
   try {
     await git(root, ['worktree', 'add', '--detach', worktree, 'HEAD']);
     added = true;
@@ -356,9 +360,16 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
       }
       for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
     }
+    // Lesson #41: a clean exit with an invalid final envelope is the only evidence of what codex
+    // actually did, so the worktree stays on disk instead of being discarded with everything else.
+    if (result.envelopeInvalid) {
+      keepWorktree = true;
+      result.error = `envelope invalid; worktree kept at ${worktree}`;
+      result.keptWorkspace = worktree;
+    }
     return result;
   } finally {
-    if (added) await git(root, ['worktree', 'remove', '--force', worktree]);
+    if (added && !keepWorktree) await git(root, ['worktree', 'remove', '--force', worktree]);
   }
 }
 
@@ -400,7 +411,7 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
         if (job.outputs.includes(file)) { baseHashes[file] = bytes === null ? null : digest(bytes); baseModes[file]=mode; }
         if (bytes !== null && job.agent !== 'codex') await write(workspaceRoot, file, bytes, false, mode);
       }
-      state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, workspace, outputs: job.outputs, baseHashes, baseModes, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', progress: null });
+      state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, workspace, outputs: job.outputs, baseHashes, baseModes, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', progress: null, keptWorkspace: null });
     }
     await save();
     let next = 0;
@@ -438,7 +449,7 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
         await write(root, `${directory}/${job.id}/provider.jsonl`, result.stdout, true);
         await write(root, `${directory}/${job.id}/stderr.log`, result.stderr, true);
         await write(root, `${directory}/${job.id}/response.txt`, result.response, true);
-        Object.assign(record, { status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
+        Object.assign(record, { status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
         await queueSave();
       }
     });
@@ -509,6 +520,9 @@ function parseFinalJson(text) {
 }
 const cappedNotes = value => (Array.isArray(value?.notes) ? value.notes : []).slice(0, MAX_NOTES).map(note => typeof note === 'string' ? note.slice(0, MAX_NOTE_LEN) : note);
 const displayResult = value => !value ? null : !Array.isArray(value.notes) ? value : { ...value, notes: cappedNotes(value) };
+// Lesson #46: surfaced to the coordinator without failing the job, since a mismatch is evidence
+// about what ran, not proof the work is wrong.
+const modelMismatchWarnings = state => state.jobs.filter(job => job.modelMismatch).map(job => `model mismatch: ${job.id} asked ${job.model}, ran ${job.actualModel}`);
 async function jobFinalJson(root, id, jobId) {
   const bytes = await bytesAt(root, `.swarm/runs/${id}/${jobId}/response.txt`, true);
   return parseFinalJson(bytes ? bytes.toString('utf8') : '');
@@ -535,7 +549,7 @@ export async function waitRun(root, id, { timeoutMs, pollMs = 1000, sleep = ms =
     if (costUsd !== null) { total += costUsd; any = true; }
     jobs.push({ id: record.id, status: record.status, costUsd, notes: cappedNotes(parsed) });
   }
-  return { runId: id, status: state.status, durationMs: summarizeRun(state, now()).elapsedMs, costUsd: any ? total : null, jobs };
+  return { runId: id, status: state.status, durationMs: summarizeRun(state, now()).elapsedMs, costUsd: any ? total : null, warnings: modelMismatchWarnings(state), jobs };
 }
 
 // {integrated} and {integrated:.ext} must be a whole argv item; a placeholder that expands
@@ -694,6 +708,9 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
       await resolveReadPaths(job.readPaths);
       const files = await codexDirtyFiles(root, job);
       if (files.length) warnings.push({ code: 'codex-uncommitted-files', jobId: job.id, files, message: 'Codex starts from HEAD; uncommitted changes to these declared files are not included.' });
+      // Lesson #41: parseCodexResult only ever accepts {files_changed,notes}; a prompt asking codex
+      // for other final-JSON keys is always going to fail that envelope check.
+      if (codexExtraFinalJsonKeys(job.prompt)) warnings.push({ code: 'codex-extra-final-keys', jobId: job.id, message: `codex job ${job.id}: final JSON may only hold files_changed and notes; put extra fields inside notes` });
     }
     let bytes=0;
     const files=[];
@@ -714,7 +731,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
     for (const pair of findUncoveredTests(root, job, projectFiles)) uncovered.push({ job: job.id, ...pair });
     jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files});
   }
-  if (uncovered.length) fail(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`);
+  if (uncovered.length) throw Object.assign(new Error(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`), { details: { suggestedIgnoreTests: suggestIgnoreTests(uncovered) } });
   return {status:'valid',root,jobs,warnings};
 }
 
@@ -728,7 +745,7 @@ export async function inspectRun(root,id){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
     const parsedResult=await jobFinalJson(root,id,job.id);
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
@@ -738,7 +755,37 @@ export async function inspectRun(root,id){
       files.push({job:job.id,jobStatus:record.status,path:file,baseHash:record.baseHashes[file],currentHash,proposedHash,bytes:proposed?.length??0,status:record.status!=='complete'?'blocked':proposed===null?'missing':state.integratedAt&&currentHash===proposedHash?'applied':conflict?'conflict':currentHash===proposedHash?'unchanged':'ready'});
     }
   }
-  return {id,status:state.status,integratedAt:state.integratedAt??null,jobs,files};
+  return {id,status:state.status,integratedAt:state.integratedAt??null,warnings:modelMismatchWarnings(state),jobs,files};
+}
+
+// Lesson #48: a coordinator asking only "did it work, what did it say" should not have to
+// reconstruct that from the full inspect payload (workspace files, tiers, per-file conflicts).
+export async function inspectResults(root, id) {
+  root = await fs.realpath(root);
+  const state = await readState(root, id);
+  if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
+  const jobs = [];
+  for (const record of state.jobs) {
+    const parsed = await jobFinalJson(root, id, record.id);
+    jobs.push({ id: record.id, status: record.status, model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, result: displayResult(parsed) });
+  }
+  return { runId: id, status: state.status, warnings: modelMismatchWarnings(state), jobs };
+}
+
+// Lesson #48: a single read-only question does not deserve a hand-written manifest; ask builds
+// the one-job manifest itself and returns just the worker's answer.
+export async function askRun(root, { model, context = [], agent = 'claude', timeoutMs, question } = {}, runOptions = {}) {
+  if (typeof model !== 'string' || !model.trim()) fail('ask requires --model');
+  if (!Array.isArray(context) || !context.length) fail('ask requires --context with at least one file');
+  if (typeof question !== 'string' || !question.trim()) fail('ask requires a non-empty question');
+  if (agent !== 'claude' && !API_AGENTS.includes(agent)) fail('ask only supports claude or an API agent, not codex');
+  const id = `ask-${Date.now()}`;
+  const prompt = `${question.trim()}\n\nFinish with exactly one JSON line containing your complete answer as a JSON object.`;
+  const job = { id, agent, model, prompt, context, outputs: [], ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+  const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
+  const record = state.jobs[0];
+  const parsed = await jobFinalJson(root, id, id);
+  return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, result: displayResult(parsed), ...(parsed === null ? { error: 'Worker returned no parsable final JSON' } : {}) };
 }
 
 export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform}={}){
@@ -1035,7 +1082,7 @@ async function main() {
   const args=process.argv.slice(2);let root=path.join(path.dirname(fileURLToPath(import.meta.url)),'..');
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='version'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
@@ -1060,6 +1107,32 @@ async function main() {
   if(args[0]==='onboard'){
     if(args.length>1)fail('Invalid arguments; use --help');
     process.stdout.write(await onboardReport(root));
+    return;
+  }
+  // ask has its own flag/positional shape (no single RUN/MANIFEST argument), so it is parsed and
+  // dispatched entirely here rather than sharing the generic [command,argument,...rest] path below.
+  if(args[0]==='ask'){
+    const flags=args.slice(1);
+    let model,contextArg,agent='claude',timeoutSeconds;
+    const positionals=[];
+    for(let index=0;index<flags.length;index++){
+      const flag=flags[index];
+      if(flag==='--model'){model=flags[++index];continue;}
+      if(flag==='--context'){contextArg=flags[++index];continue;}
+      if(flag==='--agent'){agent=flags[++index];continue;}
+      if(flag==='--timeout'){
+        const next=flags[++index];
+        if(next===undefined||!/^\d+(\.\d+)?$/.test(next)||Number(next)<=0)fail('--timeout requires a positive number of seconds');
+        timeoutSeconds=Number(next);
+        continue;
+      }
+      positionals.push(flag);
+    }
+    if(positionals.length!==1)fail('ask requires exactly one question argument; use --help');
+    root=await fs.realpath(root);
+    const result=await askRun(root,{model,context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]});
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if(result.status!=='complete')process.exitCode=1;
     return;
   }
   const [command,argument,...rest]=args;
@@ -1114,6 +1187,15 @@ async function main() {
     const flags=rest.splice(0,rest.length);
     shipFlags=parseShipFlags(flags);
   }
+  // inspect's --results is a read-only reduced view; stripped here for the same reason as above.
+  let resultsOnly=false;
+  if(command==='inspect'){
+    const flags=rest.splice(0,rest.length);
+    for(const flag of flags){
+      if(flag==='--results'){resultsOnly=true;continue;}
+      rest.push(flag);
+    }
+  }
   if(rest.length||!['doctor','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
   root=await fs.realpath(root);let result;
   if(command==='monitor'&&view){
@@ -1162,7 +1244,7 @@ async function main() {
   }else if(command==='status')result=await readState(root,argument);
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
   else if(command==='wait')result=await waitRun(root,argument,{timeoutMs:waitTimeoutSeconds!==null?waitTimeoutSeconds*1000:undefined});
-  else if(command==='inspect')result=await inspectRun(root,argument);
+  else if(command==='inspect')result=resultsOnly?await inspectResults(root,argument):await inspectRun(root,argument);
   else if(command==='cancel')result=await cancelRun(root,argument);
   else if(command==='ship')result=await shipRun(root,argument,shipFlags);
   else result=await integrateRun(root,argument,{noChecks,mutants:useMutants});
@@ -1173,4 +1255,4 @@ async function main() {
   if(command==='integrate'&&requireChecks&&(result.checksPassed===false||result.mutantsPassed===false))process.exitCode=1;
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { process.stderr.write(`${JSON.stringify({ status: 'error', error: error.message })}\n`); process.exitCode = 1; });
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { process.stderr.write(`${JSON.stringify({ status: 'error', error: error.message, ...(error.details ?? {}) })}\n`); process.exitCode = 1; });

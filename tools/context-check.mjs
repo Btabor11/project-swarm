@@ -16,10 +16,17 @@ const JS_TEST_FILE_RE = /\.(test|spec)\.(js|ts|mjs|cjs|jsx|tsx)$/;
 const PY_TEST_FILE_RE = /(^|\/)(test_[^/]+\.py|[^/]+_test\.py)$/;
 const GO_TEST_FILE_RE = /(^|\/)[^/]+_test\.go$/;
 const GENERIC_STEMS = new Set(['index', 'mod', 'main', 'lib', '__init__', 'init', 'utils', 'types', 'config']);
+const MANIFEST_OR_VERSION_FILES = new Set(['package.json', 'package-lock.json', 'pyproject.toml', 'uv.lock', 'Cargo.toml', 'Cargo.lock']);
 
 export function isTestFile(relPath) {
   const p = String(relPath).replace(/\\/g, '/');
   return TEST_DIR_RE.test(p) || JS_TEST_FILE_RE.test(p) || PY_TEST_FILE_RE.test(p) || GO_TEST_FILE_RE.test(p);
+}
+
+function isManifestOrVersionFile(relPath) {
+  const p = String(relPath).replace(/\\/g, '/');
+  if (MANIFEST_OR_VERSION_FILES.has(p)) return true;
+  return p.endsWith('__init__.py');
 }
 
 function escapeRegExp(text) {
@@ -113,7 +120,7 @@ export function findUncoveredTests(root, job, files = listProjectFiles(root)) {
   }
   const pairs = [];
   for (const output of job.outputs ?? []) {
-    if (isTestFile(output)) continue;
+    if (isTestFile(output) || isManifestOrVersionFile(output)) continue;
     let stat;
     try {
       stat = fs.statSync(path.join(root, output));
@@ -128,4 +135,17 @@ export function findUncoveredTests(root, job, files = listProjectFiles(root)) {
     }
   }
   return pairs.sort((a, b) => (a.test !== b.test ? (a.test < b.test ? -1 : 1) : a.output < b.output ? -1 : a.output > b.output ? 1 : 0));
+}
+
+export function suggestIgnoreTests(uncovered) {
+  const grouped = {};
+  for (const item of uncovered) {
+    if (!grouped[item.job]) grouped[item.job] = new Set();
+    grouped[item.job].add(item.test);
+  }
+  const result = {};
+  for (const [jobId, tests] of Object.entries(grouped)) {
+    result[jobId] = Array.from(tests).sort();
+  }
+  return result;
 }
