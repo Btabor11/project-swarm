@@ -289,5 +289,7 @@ test('mutants never execute during run, only during integrate --mutants', async 
   const state = await runManifest(root, plan, { spawnImpl: update });
   assert.equal(state.mutants, undefined);
   assert.equal(state.mutantsSummary, undefined);
-  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'original');
+  const proposed = await fs.readFile(path.join(root, '.swarm', 'workspaces', state.id, 'writer', 'input.txt'), 'utf8');
+  assert.equal(proposed, 'updated');
 });
