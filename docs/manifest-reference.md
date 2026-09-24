@@ -28,6 +28,8 @@ Replace the example paths with files in your target project.
 - `jobs`: required array of 1–256 jobs.
 - `concurrency`: optional integer from 1 to 32; default is 2. The effective parallelism is never greater than the number of jobs.
 - `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
+- `mutants`: optional array of at most 32 mutation entries, checked by `integrate --mutants`. See the Mutation checks section below.
+- `mutantCheck`: optional, the single check run against each mutant in `mutants`. See the Mutation checks section below.
 
 Unknown top-level fields are rejected.
 
@@ -72,16 +74,23 @@ node tools/swarm.mjs status <run-id>
 node tools/swarm.mjs monitor <run-id>
 node tools/swarm.mjs monitor <run-id> --view
 node tools/swarm.mjs monitor <run-id> --view --watch 5
+node tools/swarm.mjs wait <run-id>
+node tools/swarm.mjs wait <run-id> --timeout 300
 node tools/swarm.mjs inspect <run-id>
 node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
+node tools/swarm.mjs integrate <run-id> --mutants
 node tools/swarm.mjs cancel <run-id>
 ```
 
 Use `--root /path/to/project` to select a project explicitly. Otherwise the runner uses its own installed project root. Manifests are loaded from the selected root.
 
-`validate` checks the assignment, paths, and file size limits without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
+`validate` checks the assignment, paths, and file size limits without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out; a declared `context` file that git does not track at all (untracked or ignored, not merely edited) is instead refused outright — `Job <id>: codex context file <path> is not tracked by git (codex sees HEAD only)` — since Codex would silently see nothing there. `run` performs the same validation before dispatching any worker. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
+
+`inspect` additionally reports, per job, `result` — the worker's own final JSON-object line from its saved response (whatever keys it wrote, or `null` if no line parses as a JSON object) — and `costUsd` (a number when the provider reported one, else `null`). A `result.notes` array, if present, is capped at 20 entries of at most 500 characters each in the printed report; this is display data from the worker, never executed or trusted.
+
+`wait <run-id> [--timeout SECONDS]` blocks, polling saved run status at most once a second, until the run reaches a terminal status (`complete`, `failed`, or `cancelled`); with no `--timeout` it waits indefinitely. It prints one compact JSON line, `{runId, status, durationMs, costUsd, jobs: [{id, status, costUsd, notes}]}`, where `costUsd` is the sum of the jobs' recorded provider costs when any are available, else `null`, and each job's `notes` come from the same final-JSON-line parsing as `inspect` (capped the same way). Exit code is `0` for `complete`, `1` for `failed`/`cancelled` (or an unknown run id), and `2` if `--timeout` expires first — in that case `status` in the printed line is still `running`.
 
 After installing into a project, use `coordination/swarm-smoke.json` and `coordination/swarm-parallel-review.json` in place of the standalone checkout's `examples/` paths. `--root` may appear before or after the command.
 
@@ -151,6 +160,24 @@ The result (and the saved run state, visible from `inspect <run-id>`) gains:
 ```
 
 `status` is one of `passed`, `failed` (non-zero exit), `timeout`, `error` (the program could not be launched), or `skipped`. `tail` is the last 2000 bytes of that check's combined stdout+stderr, never more. `checksPassed` is `true` only when no check failed, timed out, or errored.
+
+## Mutation checks
+
+`integrate <run-id> --mutants` runs mutation testing after normal integration and its `checks` have already written and validated the real files. For each declared `mutants` entry, in order, it: reads the target file, requires `find` to occur in it exactly once, writes the file with `find` replaced by `replace`, runs the shared `mutantCheck` command, and then always restores the file's original bytes and mode — including when the check times out or fails to launch — before moving to the next mutant. A mutant is never applied unless `find` matched exactly once.
+
+```json
+{
+  "mutants": [
+    {"name": "off-by-one", "file": "src/limits.js", "find": "value <= max", "replace": "value < max"}
+  ],
+  "mutantCheck": {"argv": ["npm", "test"], "timeoutMs": 300000}
+}
+```
+
+- `mutants`: optional array of at most 32 entries `{"name", "file", "find", "replace"}`. `name` is required, non-empty, and unique. `file` is a relative project path, validated with the same rules as a job output. `find` is a required non-empty string that must occur in `file` exactly once for the mutant to run. `replace` is a required string (it may be empty).
+- `mutantCheck`: required whenever `--mutants` is used — `{"argv": [...], "timeoutMs": 300000}`, the same shape and limits as one entry in `checks` (no shell, no placeholders), run once per mutant with `cwd` at the project root.
+
+The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs", "tail"}]` and `mutantsSummary: {"killed", "survived", "errors"}`. Per mutant, `status` is `killed` when the check exits non-zero, `survived` when it exits zero, or `error` for a timeout, a launch failure, a `find` match count other than one (`tail` explains why, e.g. `"find matched 0 times"`), or a missing file — none of these apply or run a check. `mutantsPassed` is `true` only when no mutant survived or errored. With `--require-checks`, a surviving or errored mutant also makes the `integrate` command exit 1, alongside a failed `checks` result. `--mutants` with no `mutants` declared in the manifest is a clear error, not a silent no-op. Mutants never touch `.git`/`.swarm` (the same path rules as every other declared file forbid it) and never run during `run` — only `integrate --mutants`.
 
 ## Advisory preflight
 

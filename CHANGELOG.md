@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `wait`, `inspect` shows worker notes and cost, `validate` refuses untracked codex context, `integrate --mutants` mutation checks; CI actions SHA-pinned (1.6.0)
 - Repository moved to `RDW-Labz/project-swarm`: `package.json` `repository.url`, README and setup clone URLs updated (1.5.1)
 - One shared install per machine, agent-readable install steps, onboard/version/update commands (1.5.0)
 - Add a sandboxed `codex` worker agent (Codex CLI in a per-job git worktree, macOS seatbelt; 1.4.0)

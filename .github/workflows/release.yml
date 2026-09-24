@@ -8,8 +8,7 @@ jobs:
   tag:
     runs-on: ubuntu-latest
     steps:
-      # TODO: pin to a full commit SHA once a reviewed one is available for this major version.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Tag the release if package.json's version has no matching tag

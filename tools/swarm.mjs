@@ -87,7 +87,7 @@ async function jsonWrite(root, value, data) {
 
 export function validateManifest(manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck'].includes(key)) fail(`Unknown manifest field: ${key}`);
   if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 32)) fail('Concurrency must be 1–32');
   if (manifest.checks !== undefined) {
     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
@@ -99,6 +99,27 @@ export function validateManifest(manifest) {
       if (check.argv.some(item => typeof item !== 'string')) fail(`Check argv items must be strings: ${check.name}`);
       if (check.timeoutMs !== undefined && (!Number.isInteger(check.timeoutMs) || check.timeoutMs < 1000 || check.timeoutMs > 1800000)) fail(`Check timeoutMs must be 1000–1800000: ${check.name}`);
     }
+  }
+  if (manifest.mutants !== undefined) {
+    if (!Array.isArray(manifest.mutants) || manifest.mutants.length > 32) fail('mutants must be an array of at most 32 mutants');
+    const mutantNames = new Set();
+    for (const mutant of manifest.mutants) {
+      if (!mutant || typeof mutant !== 'object') fail('Invalid mutant');
+      for (const key of Object.keys(mutant)) if (!['name', 'file', 'find', 'replace'].includes(key)) fail(`Unknown mutant field: ${key}`);
+      if (typeof mutant.name !== 'string' || !mutant.name.trim() || mutantNames.has(mutant.name)) fail(`Invalid or duplicate mutant name: ${mutant?.name}`);
+      mutantNames.add(mutant.name);
+      relative(mutant.file);
+      if (typeof mutant.find !== 'string' || !mutant.find) fail(`Mutant find must be a non-empty string: ${mutant.name}`);
+      if (typeof mutant.replace !== 'string') fail(`Mutant replace must be a string: ${mutant.name}`);
+    }
+  }
+  if (manifest.mutantCheck !== undefined) {
+    const check = manifest.mutantCheck;
+    if (!check || typeof check !== 'object') fail('Invalid mutantCheck');
+    for (const key of Object.keys(check)) if (!['argv', 'timeoutMs'].includes(key)) fail(`Unknown mutantCheck field: ${key}`);
+    if (!Array.isArray(check.argv) || !check.argv.length) fail('mutantCheck argv must be a non-empty array');
+    if (check.argv.some(item => typeof item !== 'string')) fail('mutantCheck argv items must be strings');
+    if (check.timeoutMs !== undefined && (!Number.isInteger(check.timeoutMs) || check.timeoutMs < 1000 || check.timeoutMs > 1800000)) fail('mutantCheck timeoutMs must be 1000–1800000');
   }
   const ids = new Set();
   const writers = new Set();
@@ -453,6 +474,53 @@ export async function cancelRun(root, id) {
   return { id, status: 'cancellation-requested' };
 }
 
+const MAX_NOTES = 20, MAX_NOTE_LEN = 500;
+
+// The last line that parses as a JSON object, not merely the last non-empty line: a worker's
+// final structured result may follow ordinary trailing log lines.
+function parseFinalJson(text) {
+  if (typeof text !== 'string' || !text) return null;
+  const lines = text.split('\n');
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index].trim();
+    if (!line) continue;
+    let value;
+    try { value = JSON.parse(line); } catch { continue; }
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  }
+  return null;
+}
+const cappedNotes = value => (Array.isArray(value?.notes) ? value.notes : []).slice(0, MAX_NOTES).map(note => typeof note === 'string' ? note.slice(0, MAX_NOTE_LEN) : note);
+const displayResult = value => !value ? null : !Array.isArray(value.notes) ? value : { ...value, notes: cappedNotes(value) };
+async function jobFinalJson(root, id, jobId) {
+  const bytes = await bytesAt(root, `.swarm/runs/${id}/${jobId}/response.txt`, true);
+  return parseFinalJson(bytes ? bytes.toString('utf8') : '');
+}
+
+// Polls saved run state only; it never touches provider processes itself, so a wait can be
+// interrupted and re-run without side effects on the run it is watching.
+export async function waitRun(root, id, { timeoutMs, pollMs = 1000, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now } = {}) {
+  root = await fs.realpath(root);
+  if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 0)) fail('timeoutMs must be a non-negative integer');
+  if (!Number.isInteger(pollMs) || pollMs < 1 || pollMs > 1000) fail('pollMs must be 1–1000');
+  const deadline = timeoutMs !== undefined ? now() + timeoutMs : null;
+  let state = await readState(root, id);
+  while (state.status === 'running') {
+    if (deadline !== null && now() >= deadline) break;
+    await sleep(deadline !== null ? Math.max(1, Math.min(pollMs, deadline - now())) : pollMs);
+    state = await readState(root, id);
+  }
+  const jobs = [];
+  let total = 0, any = false;
+  for (const record of state.jobs) {
+    const parsed = await jobFinalJson(root, id, record.id);
+    const costUsd = typeof record.costUsd === 'number' ? record.costUsd : null;
+    if (costUsd !== null) { total += costUsd; any = true; }
+    jobs.push({ id: record.id, status: record.status, costUsd, notes: cappedNotes(parsed) });
+  }
+  return { runId: id, status: state.status, durationMs: summarizeRun(state, now()).elapsedMs, costUsd: any ? total : null, jobs };
+}
+
 // {integrated} and {integrated:.ext} must be a whole argv item; a placeholder that expands
 // to zero files means the check has nothing to act on, so it is skipped rather than run empty.
 function expandCheckArgv(argv, integratedFiles) {
@@ -506,7 +574,41 @@ async function runChecks(root, checks, integratedFiles, spawnImpl) {
   return { checks: results, checksPassed: results.every(check => !['failed', 'timeout', 'error'].includes(check.status)) };
 }
 
-export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn } = {}) {
+// The mutant's file is written, checked, then always restored byte-for-byte (try/finally,
+// including on a check timeout or spawn error) so a mutation check can never leave a real edit.
+async function runMutant(root, mutant, checkSpec, spawnImpl) {
+  const start = Date.now();
+  const original = await bytesAt(root, mutant.file);
+  if (original === null) return { name: mutant.name, file: mutant.file, status: 'error', exitCode: null, durationMs: Date.now() - start, tail: 'file not found' };
+  const mode = (await fs.stat(await safePath(root, mutant.file))).mode & 0o777;
+  const text = original.toString('utf8');
+  const count = text.split(mutant.find).length - 1;
+  if (count !== 1) return { name: mutant.name, file: mutant.file, status: 'error', exitCode: null, durationMs: Date.now() - start, tail: `find matched ${count} times` };
+  const mutated = Buffer.from(text.replace(mutant.find, mutant.replace), 'utf8');
+  const originalHash = digest(original);
+  try {
+    await write(root, mutant.file, mutated, false, mode);
+    const result = await runCheck(mutant.name, checkSpec.argv, root, checkSpec.timeoutMs ?? 300000, spawnImpl);
+    const status = result.status === 'passed' ? 'survived' : result.status === 'failed' ? 'killed' : 'error';
+    return { name: mutant.name, file: mutant.file, status, exitCode: result.exitCode, durationMs: result.durationMs, tail: result.tail };
+  } finally {
+    await write(root, mutant.file, original, false, mode);
+    const restored = await bytesAt(root, mutant.file);
+    if (restored === null || digest(restored) !== originalHash) fail(`Failed to restore ${mutant.file} after mutant ${mutant.name}`);
+  }
+}
+
+async function runMutants(root, manifest, spawnImpl) {
+  if (!manifest.mutants?.length) fail('No mutants declared in this manifest; add manifest.mutants to use --mutants');
+  if (!manifest.mutantCheck) fail('No mutantCheck declared in this manifest; add manifest.mutantCheck to use --mutants');
+  const results = [];
+  for (const mutant of manifest.mutants) results.push(await runMutant(root, mutant, manifest.mutantCheck, spawnImpl));
+  const summary = { killed: 0, survived: 0, errors: 0 };
+  for (const result of results) summary[result.status === 'killed' ? 'killed' : result.status === 'survived' ? 'survived' : 'errors']++;
+  return { mutants: results, mutantsSummary: summary, mutantsPassed: summary.survived === 0 && summary.errors === 0 };
+}
+
+export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false } = {}) {
   root = await fs.realpath(root);
   const state = await readState(root, id);
   if (state.root !== root || state.id !== id || state.status !== 'complete') fail('Only a complete run from this repository can be integrated');
@@ -549,12 +651,23 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     // a formatter may legitimately rewrite the files this same integration just wrote.
     const checksResult = noChecks ? { checks: [], checksPassed: true, checksSkipped: true } : { ...await runChecks(root, manifest.checks ?? [], state.integratedFiles, spawnImpl), checksSkipped: false };
     Object.assign(state, checksResult);
+    // Mutation checks run only after normal integration and its checks have already written
+    // and validated the real files; they never run during `run` and never touch .git/.swarm.
+    const mutantsResult = mutants ? await runMutants(root, manifest, spawnImpl) : {};
+    if (mutants) Object.assign(state, mutantsResult);
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
-    return { id, status: 'integrated', files: state.integratedFiles, ...checksResult };
+    return { id, status: 'integrated', files: state.integratedFiles, ...checksResult, ...mutantsResult };
   } finally { await fs.rmdir(lock); }
 }
 
-export async function validateProject(root, manifest) {
+// codex sees only the detached HEAD worktree, so a declared context file that git does not
+// track (untracked or ignored) would silently vanish from what the worker is told to read first.
+async function isTrackedByGit(root, file, exec) {
+  try { await exec('git', ['-C', root, 'ls-files', '--error-unmatch', '--', file], { encoding: 'utf8' }); return true; }
+  catch { return false; }
+}
+
+export async function validateProject(root, manifest, { exec = execFileAsync } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
   const jobs=[], warnings=[];
   for(const job of manifest.jobs){
@@ -568,6 +681,7 @@ export async function validateProject(root, manifest) {
     for(const file of new Set([...job.context,...job.outputs])){
       const data=await bytesAt(root,file);
       if(data===null && job.context.includes(file)) fail(`Missing context: ${file}`);
+      if (job.agent === 'codex' && job.context.includes(file) && !(await isTrackedByGit(root, file, exec))) fail(`Job ${job.id}: codex context file ${file} is not tracked by git (codex sees HEAD only)`);
       bytes+=data?.length??0;
       files.push({path:file,bytes:data===null?0:data.length,exists:data!==null,context:job.context.includes(file),output:job.outputs.includes(file)});
       if(data !== null && !['claude', 'codex'].includes(job.agent)) decodeContext(data);
@@ -587,7 +701,8 @@ export async function inspectRun(root,id){
   for(const job of manifest.jobs){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status});
+    const parsedResult=await jobFinalJson(root,id,job.id);
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
@@ -831,7 +946,7 @@ async function main() {
   const args=process.argv.slice(2);let root=path.join(path.dirname(fileURLToPath(import.meta.url)),'..');
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | inspect RUN | integrate RUN [--no-checks|--require-checks] | cancel RUN | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='version'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
@@ -876,19 +991,34 @@ async function main() {
     }
     if(watchSeconds!==null&&(watchSeconds<=0))fail('--watch requires a positive number of seconds');
   }
-  // integrate's checks flags are read-only selection of whether/how checks run; strip them
-  // here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false;
+  // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
+  // them here so the generic argument-count check below still fails on anything else.
+  let noChecks=false,requireChecks=false,useMutants=false;
   if(command==='integrate'){
     const flags=rest.splice(0,rest.length);
     for(const flag of flags){
       if(flag==='--no-checks'){noChecks=true;continue;}
       if(flag==='--require-checks'){requireChecks=true;continue;}
+      if(flag==='--mutants'){useMutants=true;continue;}
       rest.push(flag);
     }
     if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
   }
-  if(rest.length||!['doctor','validate','preflight','run','status','monitor','inspect','integrate','cancel'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
+  // wait's --timeout is read-only selection of how long to poll; stripped here for the same reason.
+  let waitTimeoutSeconds=null;
+  if(command==='wait'){
+    const flags=rest.splice(0,rest.length);
+    for(let index=0;index<flags.length;index++){
+      if(flags[index]==='--timeout'){
+        const next=flags[index+1];
+        if(next===undefined||!/^\d+(\.\d+)?$/.test(next)||Number(next)<=0)fail('--timeout requires a positive number of seconds');
+        waitTimeoutSeconds=Number(next);index++;
+        continue;
+      }
+      rest.push(flags[index]);
+    }
+  }
+  if(rest.length||!['doctor','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
   root=await fs.realpath(root);let result;
   if(command==='monitor'&&view){
     let status='running';
@@ -935,12 +1065,14 @@ async function main() {
     }
   }else if(command==='status')result=await readState(root,argument);
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
+  else if(command==='wait')result=await waitRun(root,argument,{timeoutMs:waitTimeoutSeconds!==null?waitTimeoutSeconds*1000:undefined});
   else if(command==='inspect')result=await inspectRun(root,argument);
   else if(command==='cancel')result=await cancelRun(root,argument);
-  else result=await integrateRun(root,argument,{noChecks});
+  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants});
   process.stdout.write(`${JSON.stringify(result)}\n`);
+  if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
   if(['failed','cancelled'].includes(result.status))process.exitCode=1;
-  if(command==='integrate'&&requireChecks&&result.checksPassed===false)process.exitCode=1;
+  if(command==='integrate'&&requireChecks&&(result.checksPassed===false||result.mutantsPassed===false))process.exitCode=1;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { process.stderr.write(`${JSON.stringify({ status: 'error', error: error.message })}\n`); process.exitCode = 1; });
