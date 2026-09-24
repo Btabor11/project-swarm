@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { CODEX_FLAGS, codexArgs, codexProfile, codexEnvironment, codexUsage, parseCodexResult, validateReadPaths, resolveReadPaths, git } from '../tools/codex-adapter.mjs';
+import { CODEX_FLAGS, codexArgs, codexMessage, codexProfile, codexEnvironment, codexUsage, parseCodexResult, validateReadPaths, resolveReadPaths, git } from '../tools/codex-adapter.mjs';
 import { validateManifest, validateProject, runManifest, inspectRun, integrateRun, doctor, cancelRun } from '../tools/swarm.mjs';
 import { preflightProject } from '../tools/preflight.mjs';
 
@@ -53,6 +53,27 @@ test('Codex argv always includes explicit model, all required flags, prompt and 
     assert.throws(() => codexArgs(job({ model }), launch), /model/);
   }
   for (const model of ['a', '.x:-_9', 'x'.repeat(80)]) assert.doesNotThrow(() => validateManifest(manifest({ model })));
+});
+
+test('codexMessage with no contract matches the pre-contract output byte for byte', () => {
+  const j = job();
+  const message = codexMessage(j, { contract: null });
+  assert.equal(message, `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(j.context)}. You may edit only these declared outputs: ${JSON.stringify(j.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\nTASK:\n${j.prompt}\n`);
+  const messageImplicit = codexMessage(j);
+  assert.equal(messageImplicit, message);
+});
+
+test('codexMessage with contract includes section before prompt with text verbatim', () => {
+  const j = job();
+  const contractPath = '.swarm-manifests/contract.md';
+  const contractText = 'This is the contract.\nMultiple lines.\n';
+  const message = codexMessage(j, { contract: { path: contractPath, text: contractText } });
+  assert.match(message, /Shared contract \(\.swarm-manifests\/contract\.md\)\. Read it first; it wins over any other file:/);
+  assert.ok(message.includes(contractText));
+  const contractIndex = message.indexOf('Shared contract');
+  const taskIndex = message.indexOf('TASK:');
+  assert.ok(contractIndex > 0 && taskIndex > contractIndex, 'contract section appears before TASK');
+  assert.equal((message.match(/Shared contract/g) || []).length, 1, 'contract section appears exactly once');
 });
 
 test('profile grants exact scopes and ends with sensitive path and keychain service denies', () => {

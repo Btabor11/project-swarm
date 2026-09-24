@@ -47,7 +47,7 @@ test('wait returns immediately for an already-terminal run and reports per-job c
   assert.equal(report.runId, state.id);
   assert.equal(report.status, 'complete');
   assert.equal(report.costUsd, 0.5);
-  assert.deepEqual(report.jobs, [{ id: 'writer', status: 'complete', costUsd: 0.5, notes: ['did the thing'] }]);
+  assert.deepEqual(report.jobs, [{ id: 'writer', status: 'complete', costUsd: 0.5, tokens: null, notes: ['did the thing'] }]);
   assert.ok(report.durationMs >= 0);
 });
 
