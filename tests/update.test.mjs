@@ -92,7 +92,7 @@ test('update moves to the newest tag and reports the changelog between versions'
  assert.match(result.changelog[0],/feature B/);
  assert.doesNotMatch(result.changelog.join('\n'),/feature A/);
  const skill=await fs.readFile(path.join(home,'.claude/skills/project-swarm/SKILL.md'),'utf8');
- assert.equal(skill.includes(path.join(root,'tools/swarm.mjs')),true);
+ assert.equal(skill.includes(path.join(root,'current/tools/swarm.mjs')),true);
 });
 
 test('update --projects reports old copies without --yes and replaces them with --yes, moving only swarm-owned files and leaving the project\'s own tools/, tests/, coordination/ and .swarm/ untouched',async t=>{

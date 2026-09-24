@@ -36,7 +36,11 @@ Project Swarm uses a single shared install per machine instead of a copy inside 
 node ~/.project-swarm/tools/install.mjs --user
 ```
 
-This writes `skills/project-swarm/SKILL.md` and its `references/` guides into `~/.claude/skills/project-swarm/` and `~/.codex/skills/project-swarm/`, whichever of those agent homes already exist on this machine (it reports any it skipped), with the skill's runner placeholder resolved to this install's absolute `tools/swarm.mjs` path. It is idempotent and only ever writes files inside those `skills/project-swarm/` directories. It refuses to run from a checkout with uncommitted changes to `tools/` or `skills/` unless you pass `--dev`, so a development checkout can't silently masquerade as a release.
+This writes `skills/project-swarm/SKILL.md` and its `references/` guides into `~/.claude/skills/project-swarm/` and `~/.codex/skills/project-swarm/`, whichever of those agent homes already exist on this machine (it reports any it skipped), with the skill's runner placeholder resolved to this install's `current/tools/swarm.mjs` path. It is idempotent and only ever writes files inside those `skills/project-swarm/` directories. It refuses to run from a checkout with uncommitted changes to `tools/` or `skills/` unless you pass `--dev`, so a development checkout can't silently masquerade as a release.
+
+## Upgrading while runs are live
+
+Each install snapshots `tools/` and `package.json` into `versions/<version>-<hash>/` and atomically repoints a `current` symlink at that snapshot; the skill's runner path is `<install>/current/tools/swarm.mjs`, never a path directly under `tools/`. A run already in progress resolved its own version dir's real path when it started, so `git pull` plus a later `install.mjs --user` never rewrites files under a live run: `current` moves on to the new snapshot for the next run, while the in-progress one keeps importing the files it started with. Installing from unchanged `tools/`/`package.json` content reuses the existing snapshot instead of creating a new one. Old snapshots are pruned automatically, keeping the 5 newest plus whichever one `current` still points to.
 
 ## Link a project
 

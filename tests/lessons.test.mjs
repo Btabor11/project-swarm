@@ -305,3 +305,13 @@ test('mutants never execute during run, only during integrate --mutants', async 
   const proposed = await fs.readFile(path.join(root, '.swarm', 'workspaces', state.id, 'writer', 'input.txt'), 'utf8');
   assert.equal(proposed, 'updated');
 });
+
+test('integrate --mutants expands {root} inside a mutantCheck argv item to the run\'s absolute project root', async t => {
+  const root = await fixture(t);
+  const script = "require('fs').writeFileSync('root-received.txt',process.argv[1]);process.exit(1)";
+  const plan = { version: 1, jobs: [job()], mutants: [{ name: 'flip', file: 'input.txt', find: 'updated', replace: 'mutated' }], mutantCheck: { argv: [process.execPath, '-e', script, 'PREFIX={root}/marker'] } };
+  const state = await runManifest(root, plan, { spawnImpl: update });
+  const result = await integrateRun(root, state.id, { mutants: true });
+  assert.equal(result.mutants[0].status, 'killed');
+  assert.equal(await fs.readFile(path.join(root, 'root-received.txt'), 'utf8'), `PREFIX=${await fs.realpath(root)}/marker`);
+});
