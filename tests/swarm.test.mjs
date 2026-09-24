@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runManifest, integrateRun, cancelRun, readState, validateManifest, claudeArgs } from '../tools/swarm.mjs';
+import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, claudeArgs, shipRun, shipExitCode, parseShipFlags } from '../tools/swarm.mjs';
 
 const execFileAsync = promisify(execFile);
 const CLI = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -439,4 +439,127 @@ test('file-backed probes reject nonzero exit and signals, including failed login
  const {execViaFile}=await import('../tools/cli-adapters.mjs');
  await assert.rejects(execViaFile(process.execPath,['-e','process.exit(7)']),/probe failed/);
  await assert.rejects(execViaFile(process.execPath,['-e',"process.kill(process.pid,'SIGTERM')"]),/probe failed/);
+});
+
+// --- ignoreTests, contract, and the context check ------------------------------------------
+
+async function withTestFixture(t) {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'widget.mjs'), 'export const widget = 1;');
+  await fs.mkdir(path.join(root, 'tests'));
+  await fs.writeFile(path.join(root, 'tests', 'widget.test.mjs'), "import { widget } from '../widget.mjs';");
+  return root;
+}
+
+test('validate refuses a job whose output is referenced by a test outside its context/outputs/ignoreTests', async t => {
+  const root = await withTestFixture(t);
+  await assert.rejects(
+    validateProject(root, manifest([job({ id: 'writer', context: [], outputs: ['widget.mjs'] })])),
+    /writer: widget\.mjs <- tests\/widget\.test\.mjs/,
+  );
+});
+
+test('the same job passes once the test is added to context, and again once it is listed in ignoreTests instead', async t => {
+  const root = await withTestFixture(t);
+  const withContext = job({ id: 'writer', context: ['tests/widget.test.mjs'], outputs: ['widget.mjs'] });
+  assert.equal((await validateProject(root, manifest([withContext]))).status, 'valid');
+  const withIgnore = job({ id: 'writer', context: [], outputs: ['widget.mjs'], ignoreTests: ['tests/widget.test.mjs'] });
+  assert.equal((await validateProject(root, manifest([withIgnore]))).status, 'valid');
+});
+
+test('ignoreTests follows the same path rules as context: traversal, duplicates, and the 100-entry cap', () => {
+  assert.throws(() => validateManifest(manifest([job({ ignoreTests: ['../escape'] })])), /path/i);
+  assert.throws(() => validateManifest(manifest([job({ ignoreTests: ['a.txt', 'a.txt'] })])), /Duplicate file path/);
+  assert.throws(() => validateManifest(manifest([job({ ignoreTests: Array.from({ length: 101 }, (_, i) => `t${i}.txt`) })])), /at most 100 files/);
+});
+
+test('validateProject refuses a job whose ignoreTests entry does not exist', async t => {
+  const root = await fixture(t);
+  await assert.rejects(
+    validateProject(root, manifest([job({ ignoreTests: ['tests/missing.test.mjs'] })])),
+    /writer: missing ignoreTests entry: tests\/missing\.test\.mjs/,
+  );
+});
+
+test('a top-level contract must appear in every job\'s context; the first job missing it is named', () => {
+  const withContract = {
+    version: 1,
+    jobs: [
+      job({ id: 'a', context: ['input.txt', 'CONTRACT.md'] }),
+      job({ id: 'b', context: ['input.txt'], outputs: ['other.txt'] }),
+    ],
+    contract: 'CONTRACT.md',
+  };
+  assert.throws(() => validateManifest(withContract), /Job b: context must include the shared contract file: CONTRACT\.md/);
+});
+
+test('a top-level contract may not be listed as any job\'s output', () => {
+  const withContract = {
+    version: 1,
+    jobs: [job({ id: 'a', context: ['input.txt', 'CONTRACT.md'], outputs: ['CONTRACT.md'] })],
+    contract: 'CONTRACT.md',
+  };
+  assert.throws(() => validateManifest(withContract), /Job a: outputs must not include the shared contract file \(only the coordinator writes it\): CONTRACT\.md/);
+});
+
+test('a manifest with no contract field validates exactly as before', () => {
+  assert.doesNotThrow(() => validateManifest(manifest()));
+});
+
+// --- ship: CLI wiring -----------------------------------------------------------------------
+
+test('parseShipFlags maps every flag to ship() options and rejects an unknown flag', () => {
+  assert.deepEqual(
+    parseShipFlags(['--repo', 'acme/widgets', '--pr', 'pr.json', '--require-section', 'Summary', '--require-section', 'Tests', '--no-merge', '--merge-method', 'rebase', '--timeout', '30', '--poll', '5']),
+    { repo: 'acme/widgets', payloadPath: 'pr.json', requireSections: ['Summary', 'Tests'], merge: false, mergeMethod: 'rebase', timeoutMs: 30000, pollMs: 5000 },
+  );
+  assert.throws(() => parseShipFlags(['--bogus']), /Unknown flag: --bogus/);
+  assert.throws(() => parseShipFlags(['--pr', 'pr.json']), /requires --repo/);
+  assert.throws(() => parseShipFlags(['--repo', 'acme/widgets']), /requires --pr/);
+  assert.throws(() => parseShipFlags(['--repo', 'acme/widgets', '--pr', 'pr.json', '--timeout', '0']), /--timeout requires a positive number/);
+  assert.throws(() => parseShipFlags(['--repo', 'acme/widgets', '--pr', 'pr.json', '--poll', 'soon']), /--poll requires a positive number/);
+});
+
+test('shipExitCode is 0 only for merged/held/ready, and 1 for every refusal or failure status', () => {
+  for (const status of ['merged', 'held', 'ready']) assert.equal(shipExitCode(status), 0);
+  for (const status of ['refused', 'checks-failed', 'ci-failed', 'no-ci', 'timeout', 'merge-failed']) assert.equal(shipExitCode(status), 1);
+});
+
+test('shipRun refuses a completed run that has not yet been integrated', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest(), { spawnImpl: update });
+  await fs.writeFile(path.join(root, 'pr.json'), JSON.stringify({ title: 't', head: 'h', base: 'main', body: 'b' }));
+  await assert.rejects(
+    shipRun(root, state.id, { repo: 'acme/widgets', payloadPath: 'pr.json', requireSections: [], merge: true }),
+    /must be integrated/,
+  );
+});
+
+test('CLI ship refuses an un-integrated run and exits 1 without touching git/gh', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest(), { spawnImpl: update, id: 'ship-not-integrated' });
+  await fs.writeFile(path.join(root, 'pr.json'), JSON.stringify({ title: 't', head: 'h', base: 'main', body: 'b' }));
+  await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'ship', state.id, '--repo', 'acme/widgets', '--pr', 'pr.json']), error => {
+    assert.equal(error.code, 1);
+    assert.match(JSON.parse(error.stderr).error, /must be integrated/);
+    return true;
+  });
+});
+
+test('CLI ship rejects an unknown flag before reading any run state, exit 1', async t => {
+  const root = await fixture(t);
+  await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'ship', 'no-such-run', '--repo', 'acme/widgets', '--pr', 'pr.json', '--bogus']), error => {
+    assert.equal(error.code, 1);
+    assert.match(JSON.parse(error.stderr).error, /Unknown flag: --bogus/);
+    return true;
+  });
+});
+
+test('CLI ship requires --repo and --pr', async t => {
+  const root = await fixture(t);
+  await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'ship', 'no-such-run', '--pr', 'pr.json']), error => {
+    assert.equal(error.code, 1);
+    assert.match(JSON.parse(error.stderr).error, /requires --repo/);
+    return true;
+  });
 });

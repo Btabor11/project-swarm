@@ -13,6 +13,8 @@ import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, p
 import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, parseCodexResult, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
+import { findUncoveredTests, listProjectFiles } from './context-check.mjs';
+import { ship, SHIP_DEFAULTS } from './ship.mjs';
 
 const MAX_CONTEXT = 32 * 1024 * 1024;
 const MAX_FILE = 16 * 1024 * 1024;
@@ -87,7 +89,12 @@ async function jsonWrite(root, value, data) {
 
 export function validateManifest(manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  // A shared contract file is coordinator-owned: every job reads it, no job may overwrite it.
+  if (manifest.contract !== undefined) {
+    if (typeof manifest.contract !== 'string') fail('contract must be a relative file path');
+    relative(manifest.contract);
+  }
   if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 32)) fail('Concurrency must be 1–32');
   if (manifest.checks !== undefined) {
     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
@@ -149,9 +156,19 @@ export function validateManifest(manifest) {
       if (writers.has(file.toLowerCase())) fail(`Output collision (case-insensitive): ${file}`);
       writers.add(file.toLowerCase());
     }
+    // Tests a job knowingly leaves uncovered by context; same path rules as context/outputs.
+    if (job.ignoreTests !== undefined) {
+      if (!Array.isArray(job.ignoreTests) || job.ignoreTests.length > 100) fail('ignoreTests must be an array of at most 100 files');
+      if (new Set(job.ignoreTests).size !== job.ignoreTests.length) fail('Duplicate file path');
+      for (const file of job.ignoreTests) relative(file);
+    }
+    if (manifest.contract !== undefined) {
+      if (!job.context.includes(manifest.contract)) fail(`Job ${job.id}: context must include the shared contract file: ${manifest.contract}`);
+      if (job.outputs.includes(manifest.contract)) fail(`Job ${job.id}: outputs must not include the shared contract file (only the coordinator writes it): ${manifest.contract}`);
+    }
     if (job.timeoutMs !== undefined && (!Number.isInteger(job.timeoutMs) || job.timeoutMs < 50 || job.timeoutMs > 3600000)) fail('timeoutMs must be 50–3600000');
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   for (const a of writers) for (const b of writers) if (a !== b && b.startsWith(`${a}/`)) fail(`Overlapping output paths: ${a}, ${b}`);
   return manifest;
@@ -670,6 +687,8 @@ async function isTrackedByGit(root, file, exec) {
 export async function validateProject(root, manifest, { exec = execFileAsync } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
   const jobs=[], warnings=[];
+  const projectFiles = listProjectFiles(root);
+  const uncovered = [];
   for(const job of manifest.jobs){
     if (job.agent === 'codex') {
       await resolveReadPaths(job.readPaths);
@@ -687,8 +706,15 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
       if(data !== null && !['claude', 'codex'].includes(job.agent)) decodeContext(data);
       if(bytes>MAX_CONTEXT) fail(`Context exceeds 32 MiB for ${job.id}`);
     }
+    for (const file of job.ignoreTests ?? []) {
+      if ((await bytesAt(root, file)) === null) fail(`Job ${job.id}: missing ignoreTests entry: ${file}`);
+    }
+    // Catches a worker changing an output's behavior without ever seeing the test that
+    // asserts it: advisory static text matching, resolved via context or ignoreTests.
+    for (const pair of findUncoveredTests(root, job, projectFiles)) uncovered.push({ job: job.id, ...pair });
     jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files});
   }
+  if (uncovered.length) fail(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`);
   return {status:'valid',root,jobs,warnings};
 }
 
@@ -933,6 +959,69 @@ async function monitorView(root, id) {
 // The install running this file, independent of --root: used to compare a linked project's
 // recorded version against the swarm actually executing it, never the project it targets.
 const ownRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+// --- ship: push, PR, wait for CI, merge -------------------------------------------------
+
+// Never rejects on a non-zero exit or a launch failure; ship() decides what a failed step means.
+function shipExec(file, args, { cwd, input } = {}) {
+  return new Promise(resolve => {
+    const child = execFile(file, args, { cwd, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
+      resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout ?? '', stderr: stderr ?? '' });
+    });
+    child.stdin.on('error', () => {});
+    if (input !== undefined) child.stdin.write(input);
+    child.stdin.end();
+  });
+}
+
+export function shipExitCode(status) {
+  return ['merged', 'held', 'ready'].includes(status) ? 0 : 1;
+}
+
+const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--poll']);
+
+// Pure CLI-flag parsing, kept separate from ship() execution so it is directly testable.
+export function parseShipFlags(flags) {
+  let repo, payloadPath, mergeMethod, timeoutMs, pollMs, merge = true;
+  const requireSections = [];
+  for (let index = 0; index < flags.length; index++) {
+    const flag = flags[index];
+    if (flag === '--no-merge') { merge = false; continue; }
+    if (!SHIP_FLAGS_WITH_VALUE.has(flag)) fail(`Unknown flag: ${flag}`);
+    const value = flags[++index];
+    if (value === undefined) fail(`${flag} requires a value`);
+    if (flag === '--repo') repo = value;
+    else if (flag === '--pr') payloadPath = value;
+    else if (flag === '--require-section') requireSections.push(value);
+    else if (flag === '--merge-method') mergeMethod = value;
+    else if (flag === '--timeout') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--timeout requires a positive number of seconds'); timeoutMs = Number(value) * 1000; }
+    else if (flag === '--poll') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--poll requires a positive number of seconds'); pollMs = Number(value) * 1000; }
+  }
+  if (!repo) fail('ship requires --repo OWNER/NAME');
+  if (!payloadPath) fail('ship requires --pr PAYLOAD.json');
+  return { repo, payloadPath, requireSections, merge, mergeMethod, timeoutMs, pollMs };
+}
+
+export async function shipRun(root, id, flags, { spawnImpl = spawn } = {}) {
+  root = await fs.realpath(root);
+  const state = await readState(root, id);
+  if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
+  if (!state.integratedAt) fail('Run must be integrated before it can be shipped');
+  const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
+  const payloadPath = path.resolve(root, flags.payloadPath);
+  return ship({
+    root, repo: flags.repo, payloadPath,
+    requireSections: flags.requireSections,
+    merge: flags.merge,
+    mergeMethod: flags.mergeMethod ?? SHIP_DEFAULTS.mergeMethod,
+    pollMs: flags.pollMs ?? SHIP_DEFAULTS.pollMs,
+    timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
+    noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
+    runChecks: async () => (await runChecks(root, manifest.checks ?? [], state.integratedFiles ?? [], spawnImpl)).checks,
+    exec: shipExec,
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+  });
+}
+
 async function warnProjectVersionMismatch(root){
   let pointer;
   try{pointer=JSON.parse(await fs.readFile(path.join(root,'.project-swarm.json'),'utf8'));}catch{return;}
@@ -946,7 +1035,7 @@ async function main() {
   const args=process.argv.slice(2);let root=path.join(path.dirname(fileURLToPath(import.meta.url)),'..');
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='version'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
@@ -1018,7 +1107,14 @@ async function main() {
       rest.push(flags[index]);
     }
   }
-  if(rest.length||!['doctor','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
+  // ship's flags are parsed and validated up front; stripped here for the same reason as
+  // monitor/integrate/wait so the generic argument-count check below still fails on anything else.
+  let shipFlags=null;
+  if(command==='ship'){
+    const flags=rest.splice(0,rest.length);
+    shipFlags=parseShipFlags(flags);
+  }
+  if(rest.length||!['doctor','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
   root=await fs.realpath(root);let result;
   if(command==='monitor'&&view){
     let status='running';
@@ -1068,9 +1164,11 @@ async function main() {
   else if(command==='wait')result=await waitRun(root,argument,{timeoutMs:waitTimeoutSeconds!==null?waitTimeoutSeconds*1000:undefined});
   else if(command==='inspect')result=await inspectRun(root,argument);
   else if(command==='cancel')result=await cancelRun(root,argument);
+  else if(command==='ship')result=await shipRun(root,argument,shipFlags);
   else result=await integrateRun(root,argument,{noChecks,mutants:useMutants});
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
+  if(command==='ship'){if(shipExitCode(result.status)!==0)process.exitCode=1;return;}
   if(['failed','cancelled'].includes(result.status))process.exitCode=1;
   if(command==='integrate'&&requireChecks&&(result.checksPassed===false||result.mutantsPassed===false))process.exitCode=1;
 }
