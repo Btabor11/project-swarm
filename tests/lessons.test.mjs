@@ -261,6 +261,18 @@ test('a mutant whose find text does not occur exactly once is an error and is ne
   assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
 });
 
+test('a mutant whose find text occurs twice is an error and check does not run', async t => {
+  const root = await fixture(t);
+  const plan = { version: 1, jobs: [job()], mutants: [{ name: 'twice', file: 'input.txt', find: 'updated', replace: 'mutated' }], mutantCheck: { argv: [process.execPath, '-e', 'process.exit(1)'] } };
+  const state = await runManifest(root, plan, { spawnImpl: fake(`fs.writeFileSync('input.txt','updated updated'); ${done}`) });
+  const result = await integrateRun(root, state.id, { mutants: true });
+  assert.equal(result.mutants[0].status, 'error');
+  assert.match(result.mutants[0].tail, /find matched 2 times/);
+  assert.equal(result.mutants[0].exitCode, null);
+  assert.equal(result.mutantsSummary.errors, 1);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated updated');
+});
+
 test('a mutation check timeout is reported as an error and still restores the original file', async t => {
   const root = await fixture(t);
   const plan = { version: 1, jobs: [job()], mutants: [{ name: 'hang', file: 'input.txt', find: 'updated', replace: 'mutated' }], mutantCheck: { argv: [process.execPath, '-e', 'setInterval(()=>{},1000)'], timeoutMs: 1000 } };
