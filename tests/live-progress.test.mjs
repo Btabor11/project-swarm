@@ -166,7 +166,7 @@ test('summary tolerates state saved before telemetry existed', () => {
   assert.equal(report.jobs[2].progress.stdoutBytes, 12);
   assert.equal(report.jobs[2].progress.silentMs, 800);
   assert.equal(report.jobs[3].progress.silentMs, 1000);
-  assert.deepEqual(report.counts, { queued: 0, running: 3, complete: 1, failed: 0, timeout: 0, cancelled: 0 });
+  assert.deepEqual(report.counts, { queued: 0, running: 3, complete: 1, failed: 0, timeout: 0, cancelled: 0, skipped: 0 });
 });
 
 test('telemetry writes are throttled and stop with the last observed job', async () => {

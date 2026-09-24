@@ -77,7 +77,7 @@ test('extraCliDoctor still reports missing flags when help output is complete bo
 });
 test('monitor reports real queue states, elapsed durations and numeric provider usage',()=>{
  const state={id:'x',status:'running',startedAt:new Date(1000).toISOString(),concurrency:4,peakConcurrency:2,jobs:[{id:'a',agent:'qwen',status:'complete',startedAt:new Date(1000).toISOString(),finishedAt:new Date(1200).toISOString(),durationMs:200,usage:{input_tokens:10,ignore:'private'}},{id:'b',agent:'hermes',status:'running',startedAt:new Date(1500).toISOString()},{id:'c',agent:'claude',status:'queued'}]};
- const report=summarizeRun(state,2000);assert.deepEqual(report.counts,{queued:1,running:1,complete:1,failed:0,timeout:0,cancelled:0});assert.equal(report.peakConcurrency,2);assert.equal(report.jobs[1].durationMs,500);assert.equal(report.jobs[2].durationMs,null);assert.deepEqual(report.usageByProvider.qwen,{input_tokens:10});
+ const report=summarizeRun(state,2000);assert.deepEqual(report.counts,{queued:1,running:1,complete:1,failed:0,timeout:0,cancelled:0,skipped:0});assert.equal(report.peakConcurrency,2);assert.equal(report.jobs[1].durationMs,500);assert.equal(report.jobs[2].durationMs,null);assert.deepEqual(report.usageByProvider.qwen,{input_tokens:10});
 });
 test('larger scheduler limits remain explicit and reject excessive workers/jobs',()=>{const jobs=Array.from({length:256},(_,i)=>({...job('qwen'),id:`job-${i}`,outputs:[]}));assert.equal(validateManifest({version:1,concurrency:32,jobs}).jobs.length,256);assert.throws(()=>validateManifest({version:1,concurrency:33,jobs}));assert.throws(()=>validateManifest({version:1,concurrency:2,jobs:[...jobs,{...job('qwen'),id:'last'}]}));});
 

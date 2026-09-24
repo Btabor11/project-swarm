@@ -670,12 +670,12 @@ test('inspect --results prints only the contract shape', async t => {
   const script = `fs.writeFileSync('input.txt','updated');console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(resultLine)},total_cost_usd:0.1}));`;
   const state = await runManifest(root, manifest(), { spawnImpl: fake(script) });
   const report = await inspectResults(root, state.id);
-  assert.deepEqual(Object.keys(report).sort(), ['jobs', 'runId', 'status', 'warnings'].sort());
+  assert.deepEqual(Object.keys(report).sort(), ['costNotReported', 'jobs', 'runId', 'status', 'tokens', 'warnings'].sort());
   assert.equal(report.runId, state.id);
   assert.equal(report.status, 'complete');
   assert.deepEqual(report.warnings, []);
   assert.equal(report.jobs.length, 1);
-  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status'].sort());
+  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status', 'tokens'].sort());
   assert.equal(report.jobs[0].id, 'writer');
   assert.equal(report.jobs[0].costUsd, 0.1);
   assert.deepEqual(report.jobs[0].result, { files_changed: ['input.txt'], notes: ['done'] });
@@ -686,7 +686,7 @@ test('CLI inspect --results prints only the reduced contract shape', async t => 
   const state = await runManifest(root, manifest(), { spawnImpl: update });
   const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'inspect', state.id, '--results']);
   const parsed = JSON.parse(stdout);
-  assert.deepEqual(Object.keys(parsed).sort(), ['jobs', 'runId', 'status', 'warnings'].sort());
+  assert.deepEqual(Object.keys(parsed).sort(), ['costNotReported', 'jobs', 'runId', 'status', 'tokens', 'warnings'].sort());
 });
 
 test('defaultRoot maps a versions/ snapshot back to its install and leaves a checkout alone', () => {
