@@ -42,6 +42,10 @@ The coordinator must also avoid editing a worker's owned outputs during the run.
 
 All workers receive snapshots taken before execution begins. Job B cannot consume Job A's new changes merely because the manifest lists B later or uses `concurrency: 1`. Integrate A, then create a fresh run for dependent work.
 
+## Shared contract for parallel jobs
+
+When several jobs must agree on names they cannot see each other choose — a cross-job export, CLI command, flag, manifest field, or output shape — write one plain-text contract file first and give every job's `context` that same file, before dispatch. Set the manifest's `contract` field to its path: the runner then refuses any job whose `context` omits it, and refuses any job that lists it as an `outputs` entry, since only the coordinator writes it. A worker that needs a name the contract does not list should say so in its report rather than invent one silently; add it to the contract and address it in a follow-up job instead of trusting parallel workers to converge on the same guess.
+
 ## Review, improve, repeat
 
 1. Validate the manifest and run the jobs.
@@ -50,6 +54,7 @@ All workers receive snapshots taken before execution begins. Job B cannot consum
 4. Integrate only after the full run succeeds and all outputs are acceptable.
 5. Run application tests and inspect the user-facing result.
 6. Write a new bounded assignment for any remaining issue.
+7. When the integrated tree is ready to land, `node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json` pushes the branch, opens or updates the pull request, waits for CI, and merges once green — one command instead of the manual push/open-PR/watch-CI/merge sequence, and it still refuses to push when a check the manifest just ran has failed. See [the manifest reference](manifest-reference.md#ship) for its flags and exit codes.
 
 While a run is active, use `node tools/swarm.mjs monitor <run-id>` for progress and `status <run-id>` for its saved details. Use `inspect <run-id>` to review proposed-output status and current conflicts. Inspection includes each output's `jobStatus`; files from unfinished jobs are `blocked`. A file marked `ready` is only a file-level result: another job failure or conflict can still block integration of the entire run.
 

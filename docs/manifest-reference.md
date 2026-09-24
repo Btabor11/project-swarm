@@ -30,6 +30,7 @@ Replace the example paths with files in your target project.
 - `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
 - `mutants`: optional array of at most 32 mutation entries, checked by `integrate --mutants`. See the Mutation checks section below.
 - `mutantCheck`: optional, the single check run against each mutant in `mutants`. See the Mutation checks section below.
+- `contract`: optional explicit existing relative file path. When set, every job's `context` must include it and no job's `outputs` may include it — only the coordinator writes it. Use this for a single file that lists every cross-job event, command, export, and field parallel jobs need to agree on; a job that needs a name not in that file should surface it rather than invent one silently. See "Shared contract" in [workflows](workflows.md).
 
 Unknown top-level fields are rejected.
 
@@ -46,6 +47,7 @@ Unknown top-level fields are rejected.
 - `timeoutMs`: optional integer from 50 to 3,600,000 milliseconds. Default is 300,000 milliseconds, or five minutes.
 - `tier`: optional, one of `"cheap"`, `"mid"`, or `"expensive"`. A named routing decision for the coordinator, not a model catalog lookup: setting `tier` never chooses, overrides, or resolves a model. It is validated metadata, shown in `preflight` and `inspect` output for review. See [the routing checklist](orchestration.md) for when to use each value.
 - `tierReason`: optional string, at most 2,000 characters. Required, and must be non-empty after trimming, whenever `tier` is `"expensive"`; the reason is what makes the choice inspectable instead of gut feel. Optional for `"cheap"`/`"mid"`.
+- `ignoreTests`: optional array of at most 100 explicit existing relative file paths, same path rules as `context`. Lists test files the job knowingly leaves uncovered by `context` — see "Context check" below. Give a reason in the `prompt` when you use it.
 
 **Precedence:** an explicit per-job `model` always wins. `tier` is descriptive, coordinator-facing routing guidance for choosing which provider/model to put in `model` (or which worker pool to dispatch to); the runner itself does not map `tier` to a model. A job may set both: `model` decides what actually runs, `tier`/`tierReason` document why that choice was made. A manifest with no `tier` field behaves exactly as before.
 
@@ -82,11 +84,13 @@ node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
 node tools/swarm.mjs integrate <run-id> --mutants
 node tools/swarm.mjs cancel <run-id>
+node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json
+node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json --require-section "Mutation check" --no-merge
 ```
 
 Use `--root /path/to/project` to select a project explicitly. Otherwise the runner uses its own installed project root. Manifests are loaded from the selected root.
 
-`validate` checks the assignment, paths, and file size limits without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out; a declared `context` file that git does not track at all (untracked or ignored, not merely edited) is instead refused outright — `Job <id>: codex context file <path> is not tracked by git (codex sees HEAD only)` — since Codex would silently see nothing there. `run` performs the same validation before dispatching any worker. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
+`validate` checks the assignment, paths, file size limits, and (see "Context check" below) that every existing declared output is not left uncovered by a test that already references it, without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out; a declared `context` file that git does not track at all (untracked or ignored, not merely edited) is instead refused outright — `Job <id>: codex context file <path> is not tracked by git (codex sees HEAD only)` — since Codex would silently see nothing there. `run` performs the same validation before dispatching any worker. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
 
 `inspect` additionally reports, per job, `result` — the worker's own final JSON-object line from its saved response (whatever keys it wrote, or `null` if no line parses as a JSON object) — and `costUsd` (a number when the provider reported one, else `null`). A `result.notes` array, if present, is capped at 20 entries of at most 500 characters each in the printed report; this is display data from the worker, never executed or trusted.
 
@@ -178,6 +182,27 @@ The result (and the saved run state, visible from `inspect <run-id>`) gains:
 - `mutantCheck`: required whenever `--mutants` is used — `{"argv": [...], "timeoutMs": 300000}`, the same shape and limits as one entry in `checks` (no shell, no placeholders), run once per mutant with `cwd` at the project root.
 
 The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs", "tail"}]` and `mutantsSummary: {"killed", "survived", "errors"}`. Per mutant, `status` is `killed` when the check exits non-zero, `survived` when it exits zero, or `error` for a timeout, a launch failure, a `find` match count other than one (`tail` explains why, e.g. `"find matched 0 times"`), or a missing file — none of these apply or run a check. `mutantsPassed` is `true` only when no mutant survived or errored. With `--require-checks`, a surviving or errored mutant also makes the `integrate` command exit 1, alongside a failed `checks` result. `--mutants` with no `mutants` declared in the manifest is a clear error, not a silent no-op. Mutants never touch `.git`/`.swarm` (the same path rules as every other declared file forbid it) and never run during `run` — only `integrate --mutants`.
+
+## Context check
+
+`validate` and `run` (which validates first) check, for every job, whether an already-existing declared output is referenced by a project test file that is not in that job's `context`, `outputs`, or `ignoreTests`. This catches a worker changing an output's behavior without ever seeing the test that asserts it. The check is advisory static text matching — a project file walk (or `git ls-files` in a git work tree) plus a regexp match against each candidate output's stem — not a dependency graph: it can miss an indirect reference and, rarely, flag a coincidental one. A finding fails validation, naming the job, the output, and the test: add the test to `context`, or list it in `ignoreTests` with a reason in the job's `prompt`.
+
+## Ship
+
+`ship <run-id> --repo OWNER/NAME --pr payload.json` pushes an integrated run's branch, opens or updates its pull request, waits for CI, and merges once everything is green — refusing at any earlier step leaves nothing pushed or merged. It requires the run to already be integrated (`integrate <run-id>` must have run first) and reuses that run's saved manifest `checks`, re-running them against the committed tree before filling `<!-- swarm:checks -->` in the PR body.
+
+```sh
+node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS]
+```
+
+- `--repo OWNER/NAME`: required, the GitHub repository to push to and open the PR against.
+- `--pr payload.json`: required, a JSON file `{title, head, base, body}` (`draft`/`maintainer_can_modify` optional), resolved against `--root`.
+- `--require-section NAME`: repeatable; refuse to push unless the PR body has a non-blank `## NAME` section with the checks placeholder already filled in.
+- `--no-merge`: stop at `ready` once CI is green instead of merging.
+- `--merge-method squash|merge|rebase`: default `squash`.
+- `--timeout SECONDS` / `--poll SECONDS`: how long to wait for CI and how often to poll; defaults are 45 minutes and 20 seconds respectively (the grace period before an empty rollup counts as `no-ci` is five minutes and is not configurable from the CLI).
+
+`ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
 
 ## Advisory preflight
 

@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: Apache-2.0
+// Catches a class of bug where a worker changes an output's behavior but never sees the
+// test that asserts it, because the job's context/outputs never named that test. This is
+// advisory static text matching, not a dependency graph: it can miss indirect references
+// and, rarely, flag a coincidental one; job authors resolve findings via context or
+// ignoreTests, not by trusting this module to be exhaustive.
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+export const CONTEXT_CHECK_LIMITS = Object.freeze({ maxFiles: 20_000, maxTestBytes: 1024 * 1024 });
+
+const SKIP_DIRS = new Set(['.git', '.swarm', 'node_modules', 'dist', 'build', 'target', '.venv', 'venv', '__pycache__']);
+const TEST_DIR_RE = /(^|\/)(tests?|__tests__|spec)\//;
+const JS_TEST_FILE_RE = /\.(test|spec)\.(js|ts|mjs|cjs|jsx|tsx)$/;
+const PY_TEST_FILE_RE = /(^|\/)(test_[^/]+\.py|[^/]+_test\.py)$/;
+const GO_TEST_FILE_RE = /(^|\/)[^/]+_test\.go$/;
+const GENERIC_STEMS = new Set(['index', 'mod', 'main', 'lib', '__init__', 'init', 'utils', 'types', 'config']);
+
+export function isTestFile(relPath) {
+  const p = String(relPath).replace(/\\/g, '/');
+  return TEST_DIR_RE.test(p) || JS_TEST_FILE_RE.test(p) || PY_TEST_FILE_RE.test(p) || GO_TEST_FILE_RE.test(p);
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function referencePatterns(outputPath) {
+  const norm = String(outputPath).replace(/\\/g, '/');
+  const ext = path.extname(norm);
+  let stem = path.basename(norm, ext);
+  if (GENERIC_STEMS.has(stem)) stem = path.basename(path.dirname(norm));
+  if (stem.length < 3) return [];
+  const esc = escapeRegExp(stem);
+  const boundaryStart = "(?:^|[/'\"`\\s])";
+  const boundaryEnd = "(?=['\"`])";
+  // A bare quoted stem (no leading '/' and no extension) is too common in non-path text
+  // (e.g. getByText('Chat')) to count as a reference, so the two cases are split: a '/'
+  // right before the stem is enough on its own, otherwise an extension is required.
+  const patterns = [
+    new RegExp(`${boundaryStart}${esc}\\.[A-Za-z0-9]+${boundaryEnd}`),
+    new RegExp(`/${esc}${boundaryEnd}`),
+  ];
+  if (ext === '.py') {
+    patterns.push(new RegExp(`\\bfrom\\s+[\\w.]+\\.${esc}\\s+import\\b`));
+    patterns.push(new RegExp(`\\bimport\\s+(?:[\\w]+\\.)*${esc}\\b`));
+    patterns.push(new RegExp(`\\bfrom\\s+[\\w.]+\\s+import\\s+[^\\n]*\\b${esc}\\b`));
+  }
+  if (ext === '.rs') {
+    patterns.push(new RegExp(`\\bmod\\s+${esc}\\s*;`));
+    patterns.push(new RegExp(`\\bcrate::${esc}\\b`));
+    patterns.push(new RegExp(`\\bsuper::${esc}\\b`));
+  }
+  return patterns;
+}
+
+function tryGitLsFiles(root) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8' });
+    return out.split('\0').filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function walk(root, dir, out) {
+  if (out.length >= CONTEXT_CHECK_LIMITS.maxFiles) return;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (out.length >= CONTEXT_CHECK_LIMITS.maxFiles) return;
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      walk(root, path.join(dir, entry.name), out);
+    } else if (entry.isFile()) {
+      out.push(path.relative(root, path.join(dir, entry.name)).split(path.sep).join('/'));
+    }
+  }
+}
+
+export function listProjectFiles(root) {
+  const gitFiles = tryGitLsFiles(root);
+  if (gitFiles) return gitFiles.slice(0, CONTEXT_CHECK_LIMITS.maxFiles);
+  const files = [];
+  walk(root, root, files);
+  return files.slice(0, CONTEXT_CHECK_LIMITS.maxFiles);
+}
+
+export function findUncoveredTests(root, job, files = listProjectFiles(root)) {
+  const covered = new Set([...(job.context ?? []), ...(job.outputs ?? []), ...(job.ignoreTests ?? [])]);
+  const candidates = [];
+  for (const file of files) {
+    if (!isTestFile(file) || covered.has(file)) continue;
+    let stat;
+    try {
+      stat = fs.statSync(path.join(root, file));
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() || stat.size > CONTEXT_CHECK_LIMITS.maxTestBytes) continue;
+    let text;
+    try {
+      text = fs.readFileSync(path.join(root, file), 'utf8');
+    } catch {
+      continue;
+    }
+    candidates.push({ file, text });
+  }
+  const pairs = [];
+  for (const output of job.outputs ?? []) {
+    if (isTestFile(output)) continue;
+    let stat;
+    try {
+      stat = fs.statSync(path.join(root, output));
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    const patterns = referencePatterns(output);
+    if (!patterns.length) continue;
+    for (const { file, text } of candidates) {
+      if (patterns.some(re => re.test(text))) pairs.push({ output, test: file });
+    }
+  }
+  return pairs.sort((a, b) => (a.test !== b.test ? (a.test < b.test ? -1 : 1) : a.output < b.output ? -1 : a.output > b.output ? 1 : 0));
+}
