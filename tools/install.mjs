@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 const packageRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const execFileAsync=promisify(execFile);
 const AGENT_HOMES=['.claude','.codex'];
@@ -46,13 +47,81 @@ async function skillFilePairs(source){
  return pairs;
 }
 
+async function listFiles(dir,base=dir,out=[]){
+ for(const entry of await fs.readdir(dir,{withFileTypes:true})){
+  const full=path.join(dir,entry.name);
+  if(entry.isDirectory())await listFiles(full,base,out);
+  else if(entry.isFile())out.push(path.relative(base,full));
+ }
+ return out;
+}
+
+// Snapshots tools/** and package.json into versions/<version>-<hash8>, so a live run that
+// keeps importing through current/ never sees files change under it. hash8 is the first 8 hex
+// chars of a sha256 over every copied file's relative path and contents, so re-installing
+// identical files resolves to the same dir instead of growing versions/ on every run.
+async function snapshotVersion(source,version){
+ const files=[...(await listFiles(path.join(source,'tools'))).map(file=>path.join('tools',file)),'package.json'].sort();
+ const hash=createHash('sha256');
+ for(const relative of files){hash.update(relative);hash.update(await fs.readFile(path.join(source,relative)));}
+ const versionDir=path.join(source,'versions',`${version}-${hash.digest('hex').slice(0,8)}`);
+ let exists=false;
+ try{exists=(await fs.stat(versionDir)).isDirectory();}catch(error){if(error.code!=='ENOENT')throw error;}
+ if(!exists){
+  const tmpDir=`${versionDir}.tmp-${process.pid}`;
+  for(const relative of files){
+   const destination=path.join(tmpDir,relative);
+   await fs.mkdir(path.dirname(destination),{recursive:true});
+   await fs.copyFile(path.join(source,relative),destination);
+  }
+  await fs.rename(tmpDir,versionDir);
+ }
+ return versionDir;
+}
+
+// Atomically repoints <source>/current at versionDir: a symlink created under a pid-unique
+// name, then renamed over current. rename() replaces the old symlink in one filesystem
+// operation, so a run resolving its own realpath through current/ keeps importing its own
+// version dir even while (or after) a later install swaps current to a new one.
+async function repointCurrent(source,versionDir){
+ const currentPath=path.join(source,'current');
+ const tmpLink=path.join(source,`current.tmp-${process.pid}`);
+ await fs.rm(tmpLink,{force:true});
+ await fs.symlink(versionDir,tmpLink);
+ await fs.rename(tmpLink,currentPath);
+ return currentPath;
+}
+
+// Keeps the `keep` newest version dirs (by mtime) plus whichever one `current` points to,
+// deleting the rest so versions/ doesn't grow forever.
+export async function pruneVersions(source,{keep=5}={}){
+ const versionsDir=path.join(source,'versions');
+ let entries;
+ try{entries=await fs.readdir(versionsDir,{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}
+ const dirs=entries.filter(entry=>entry.isDirectory()).map(entry=>path.join(versionsDir,entry.name));
+ let currentTarget=null;
+ try{currentTarget=await fs.realpath(path.join(source,'current'));}catch{currentTarget=null;}
+ const stats=await Promise.all(dirs.map(async dir=>({dir,mtimeMs:(await fs.stat(dir)).mtimeMs})));
+ stats.sort((a,b)=>b.mtimeMs-a.mtimeMs);
+ const keepSet=new Set(stats.slice(0,keep).map(entry=>entry.dir));
+ if(currentTarget)keepSet.add(currentTarget);
+ const removed=[];
+ for(const entry of stats){
+  if(!keepSet.has(entry.dir)){await fs.rm(entry.dir,{recursive:true,force:true});removed.push(entry.dir);}
+ }
+ return removed;
+}
+
 // Installs the skill once per agent home for every project on this machine. Idempotent: it
 // only ever writes files inside <agentHome>/skills/project-swarm and always overwrites them.
 export async function installUser({source=packageRoot,home=os.homedir(),dev=false}={}){
  source=await fs.realpath(source);
  if(!dev&&await gitDirty(source,['tools','skills']))throw Error('Refusing to install from a checkout with uncommitted changes to tools/ or skills/; commit or stash them, or pass --dev for a development checkout');
  const pkg=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8'));
- const runner=path.join(source,'tools/swarm.mjs');
+ const versionDir=await snapshotVersion(source,pkg.version);
+ const currentPath=await repointCurrent(source,versionDir);
+ await pruneVersions(source);
+ const runner=path.join(currentPath,'tools/swarm.mjs');
  const pairs=await skillFilePairs(source);
  const skipped=[],written=[];
  for(const dir of AGENT_HOMES){
@@ -71,10 +140,10 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
    written.push(destination);
   }
  }
- const record={version:pkg.version,installedAt:new Date().toISOString(),skillTargets:written};
+ const record={version:pkg.version,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner};
  const recordPath=path.join(source,'.swarm-install.json');
  await fs.writeFile(recordPath,`${JSON.stringify(record,null,2)}\n`);
- return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath};
+ return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner};
 }
 
 async function hasExistingCoordination(root){

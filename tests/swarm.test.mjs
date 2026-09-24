@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, claudeArgs, shipRun, shipExitCode, parseShipFlags, waitRun, inspectRun, inspectResults, askRun } from '../tools/swarm.mjs';
+import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, claudeArgs, shipRun, shipExitCode, parseShipFlags, waitRun, inspectRun, inspectResults, askRun, defaultRoot, parseGoFlags } from '../tools/swarm.mjs';
 
 const execFileAsync = promisify(execFile);
 const CLI = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -373,6 +373,23 @@ test('{integrated} and {integrated:.ext} placeholders expand to written files, a
  assert.equal(result.checksPassed,true);
 });
 
+test('{root} expands anywhere inside a check argv item to the run\'s absolute project root, and {integrated} keeps expanding a whole item as before', async t => {
+ const root=await fixture(t);
+ const realRoot=await fs.realpath(root);
+ const rootScript=`require('fs').writeFileSync('root-received.txt',process.argv[1])`;
+ const allScript=`require('fs').writeFileSync('all-received.json',JSON.stringify(process.argv.slice(1)))`;
+ const checks=[
+  {name:'root',argv:[process.execPath,'-e',rootScript,'PREFIX={root}/marker']},
+  {name:'all',argv:[process.execPath,'-e',allScript,'{integrated}']},
+ ];
+ const state=await runManifest(root,checkManifest([job({outputs:['a.py']})],checks),{spawnImpl:fake(`fs.writeFileSync('a.py','x'); ${done}`)});
+ const result=await integrateRun(root,state.id);
+ assert.equal(await fs.readFile(path.join(root,'root-received.txt'),'utf8'),`PREFIX=${realRoot}/marker`);
+ assert.deepEqual(JSON.parse(await fs.readFile(path.join(root,'all-received.json'),'utf8')),['a.py']);
+ assert.equal(result.checks[0].status,'passed');
+ assert.equal(result.checks[1].status,'passed');
+});
+
 test('a passing, a failing, and a timing-out check are all reported, in order, and all run', async t => {
  const root=await fixture(t);
  const checks=[
@@ -670,4 +687,22 @@ test('CLI inspect --results prints only the reduced contract shape', async t => 
   const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'inspect', state.id, '--results']);
   const parsed = JSON.parse(stdout);
   assert.deepEqual(Object.keys(parsed).sort(), ['jobs', 'runId', 'status', 'warnings'].sort());
+});
+
+test('defaultRoot maps a versions/ snapshot back to its install and leaves a checkout alone', () => {
+  assert.equal(defaultRoot('/home/u/.project-swarm/versions/1.9.0-abcd1234'), '/home/u/.project-swarm');
+  assert.equal(defaultRoot('/home/u/.project-swarm'), '/home/u/.project-swarm');
+  assert.equal(defaultRoot('/work/versions'), '/work/versions');
+});
+
+test('parseGoFlags maps every flag to go() options and needs --repo and --pr together', () => {
+  assert.deepEqual(
+    parseGoFlags(['--commit-message', 'msg', '--repo', 'acme/widgets', '--pr', 'pr.json', '--require-section', 'Mutation check', '--mutants', '--merge-method', 'rebase', '--timeout', '30']),
+    { commitMessage: 'msg', repo: 'acme/widgets', payloadPath: 'pr.json', requireSections: ['Mutation check'], mergeMethod: 'rebase', timeoutMs: 30000, mutants: true },
+  );
+  assert.deepEqual(parseGoFlags([]), { commitMessage: undefined, repo: undefined, payloadPath: undefined, requireSections: [], mergeMethod: undefined, timeoutMs: undefined, mutants: false });
+  assert.throws(() => parseGoFlags(['--repo', 'acme/widgets']), /both --repo and --pr/);
+  assert.throws(() => parseGoFlags(['--pr', 'pr.json']), /both --repo and --pr/);
+  assert.throws(() => parseGoFlags(['--bogus']), /Unknown flag: --bogus/);
+  assert.throws(() => parseGoFlags(['--timeout', '0']), /--timeout requires a positive number/);
 });

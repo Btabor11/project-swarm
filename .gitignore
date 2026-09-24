@@ -7,3 +7,5 @@ artifacts/
 *.tgz
 .swarm-install.json
 .swarm-projects.json
+/versions/
+/current

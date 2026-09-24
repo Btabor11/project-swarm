@@ -88,9 +88,10 @@ node tools/swarm.mjs integrate <run-id> --mutants
 node tools/swarm.mjs cancel <run-id>
 node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json
 node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json --require-section "Mutation check" --no-merge
+node tools/swarm.mjs go examples/smoke.json --commit-message "Add render review" --repo OWNER/NAME --pr payload.json
 ```
 
-Use `--root /path/to/project` to select a project explicitly. Otherwise the runner uses its own installed project root. Manifests are loaded from the selected root.
+Use `--root /path/to/project` to select a project explicitly. Otherwise the runner uses its own installed project root. Manifests are loaded from the selected root. Installs are versioned: `<source>/current/tools/swarm.mjs` is always the runner path, kept stable for a run already in flight even if a later install/update repoints `current` to a newer version underneath it.
 
 `validate` checks the assignment, paths, file size limits, and (see "Context check" below) that every existing declared output is not left uncovered by a test that already references it, without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out; a declared `context` file that git does not track at all (untracked or ignored, not merely edited) is instead refused outright — `Job <id>: codex context file <path> is not tracked by git (codex sees HEAD only)` — since Codex would silently see nothing there. `run` performs the same validation before dispatching any worker. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
 
@@ -164,6 +165,8 @@ The `monitor` command is a single read-only snapshot, suitable for periodic coor
 
 Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrated}` expands to the run's integrated file paths (relative to the project root) as separate argv items; `{integrated:.py}` (or any other extension) expands to only the integrated files with that extension. If a placeholder expands to zero files, that check is skipped (`status: "skipped"`) rather than run with nothing to act on.
 
+The text `{root}` may also appear anywhere inside a `checks` or `mutantCheck` argv item — not only as a whole item — and is replaced with the run's absolute project root, for example `"CARGO_TARGET_DIR={root}/src-tauri/target"`. This keeps a project-relative build directory unique per run so two parallel runs never share (and corrupt) the same build folder. `{integrated}`/`{integrated:.ext}` still only expand a whole item, unchanged.
+
 Checks run with `cwd` at the project root, the coordinator's inherited environment, and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []` and `checksSkipped: true`).
 
 The result (and the saved run state, visible from `inspect <run-id>`) gains:
@@ -215,6 +218,22 @@ node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--requir
 - `--timeout SECONDS` / `--poll SECONDS`: how long to wait for CI and how often to poll; defaults are 45 minutes and 20 seconds respectively (the grace period before an empty rollup counts as `no-ci` is five minutes and is not configurable from the CLI).
 
 `ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
+
+## Go
+
+`go <manifest.json|run-id> [--commit-message MSG] [--repo OWNER/NAME --pr payload.json] [--require-section NAME]... [--mutants] [--merge-method M] [--timeout S]` is one command carrying a manifest (or an already-started run) as far toward a merged change as the given flags allow, stopping at the first stage that fails:
+
+1. **run** — given a manifest path, validate it, run it to completion, and wait; given a run id instead, this stage is skipped entirely and that run id is used as-is.
+2. **integrate** — `integrate <run-id>` with the manifest's `checks` (and mutation checks when `--mutants` is passed or the manifest declares `mutants`).
+3. **commit** — only when `--commit-message` is given: stage exactly that run's integrated output files (`git add --` plus that exact file list, never `git add -A`) and commit them with the message verbatim.
+4. **ship** — only when both `--repo` and `--pr` are given: the same `ship` described above, forwarding `--require-section`, `--merge-method`, and `--timeout`. It requires stage 3 to have run, or an already clean tree.
+
+```sh
+node tools/swarm.mjs go examples/smoke.json --commit-message "Add render review" --repo acme/widgets --pr payload.json
+node tools/swarm.mjs go <run-id> --commit-message "Add render review"
+```
+
+`go` prints one JSON line: `{status, stage, runId, cost, warnings, integrate, ship, reason}`, where `stage` is the last stage reached (`run`, `integrate`, `commit`, or `ship`), `integrate`/`ship` hold that stage's own result object (or `null` if never reached), and `status` is one of `merged | held | ready | integrated | committed | failed`. Exit code is `0` for every status except `failed`.
 
 ## Advisory preflight
 

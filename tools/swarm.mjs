@@ -15,6 +15,7 @@ import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, parseCodexResult, codexExtraFinalJsonKeys, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS } from './ship.mjs';
+import { go, commitOutputs, goExitCode } from './go.mjs';
 
 const MAX_CONTEXT = 32 * 1024 * 1024;
 const MAX_FILE = 16 * 1024 * 1024;
@@ -554,17 +555,23 @@ export async function waitRun(root, id, { timeoutMs, pollMs = 1000, sleep = ms =
 
 // {integrated} and {integrated:.ext} must be a whole argv item; a placeholder that expands
 // to zero files means the check has nothing to act on, so it is skipped rather than run empty.
-function expandCheckArgv(argv, integratedFiles) {
+// {root} may appear anywhere inside an item (e.g. "CARGO_TARGET_DIR={root}/target") and is
+// replaced with the run's absolute project root, so parallel runs never share a build folder.
+function expandCheckArgv(argv, integratedFiles, root) {
   let empty = false;
   const expanded = [];
   for (const item of argv) {
     const match = item === '{integrated}' ? '' : /^\{integrated:(\.[^}]+)\}$/.exec(item)?.[1];
-    if (match === undefined) { expanded.push(item); continue; }
+    if (match === undefined) { expanded.push(item.split('{root}').join(root)); continue; }
     const files = match ? integratedFiles.filter(file => file.endsWith(match)) : integratedFiles;
     if (!files.length) empty = true;
     expanded.push(...files);
   }
   return { argv: expanded, empty };
+}
+
+function expandRootArgv(argv, root) {
+  return argv.map(item => item.split('{root}').join(root));
 }
 
 function runCheck(name, argv, cwd, timeoutMs, spawnImpl) {
@@ -598,7 +605,7 @@ function runCheck(name, argv, cwd, timeoutMs, spawnImpl) {
 async function runChecks(root, checks, integratedFiles, spawnImpl) {
   const results = [];
   for (const check of checks) {
-    const { argv, empty } = expandCheckArgv(check.argv, integratedFiles);
+    const { argv, empty } = expandCheckArgv(check.argv, integratedFiles, root);
     if (empty) { results.push({ name: check.name, status: 'skipped', exitCode: null, durationMs: 0, tail: '' }); continue; }
     results.push(await runCheck(check.name, argv, root, check.timeoutMs ?? 300000, spawnImpl));
   }
@@ -619,7 +626,7 @@ async function runMutant(root, mutant, checkSpec, spawnImpl) {
   const originalHash = digest(original);
   try {
     await write(root, mutant.file, mutated, false, mode);
-    const result = await runCheck(mutant.name, checkSpec.argv, root, checkSpec.timeoutMs ?? 300000, spawnImpl);
+    const result = await runCheck(mutant.name, expandRootArgv(checkSpec.argv, root), root, checkSpec.timeoutMs ?? 300000, spawnImpl);
     const status = result.status === 'passed' ? 'survived' : result.status === 'failed' ? 'killed' : 'error';
     return { name: mutant.name, file: mutant.file, status, exitCode: result.exitCode, durationMs: result.durationMs, tail: result.tail };
   } finally {
@@ -1069,6 +1076,47 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn } = {}) {
   });
 }
 
+// Shared by the `run` command and `go`'s run stage: validate, confirm every used agent is
+// configured, then run to completion, announcing the run id via onRunning as soon as it exists.
+async function runManifestChecked(root, manifest, onRunning) {
+  await validateProject(root, manifest);
+  for (const agent of new Set(manifest.jobs.map(job => job.agent))) { const check = await doctor({ agent }); if (check.configured === false) fail(`${agent} is not configured; run doctor ${agent}`); }
+  const controller = new AbortController(), abort = () => controller.abort();
+  process.on('SIGINT', abort); process.on('SIGTERM', abort); let announced = false;
+  try { return await runManifest(root, manifest, { signal: controller.signal, onState: state => { if (!announced) { announced = true; onRunning?.(state); } } }); }
+  finally { process.off('SIGINT', abort); process.off('SIGTERM', abort); }
+}
+
+const GO_FLAGS_WITH_VALUE = new Set(['--commit-message', '--repo', '--pr', '--require-section', '--merge-method', '--timeout']);
+
+// Pure CLI-flag parsing for `go`, kept separate from go() execution so it is directly testable.
+export function parseGoFlags(flags) {
+  let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, mutants = false;
+  const requireSections = [];
+  for (let index = 0; index < flags.length; index++) {
+    const flag = flags[index];
+    if (flag === '--mutants') { mutants = true; continue; }
+    if (!GO_FLAGS_WITH_VALUE.has(flag)) fail(`Unknown flag: ${flag}`);
+    const value = flags[++index];
+    if (value === undefined) fail(`${flag} requires a value`);
+    if (flag === '--commit-message') commitMessage = value;
+    else if (flag === '--repo') repo = value;
+    else if (flag === '--pr') payloadPath = value;
+    else if (flag === '--require-section') requireSections.push(value);
+    else if (flag === '--merge-method') mergeMethod = value;
+    else if (flag === '--timeout') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--timeout requires a positive number of seconds'); timeoutMs = Number(value) * 1000; }
+  }
+  if ((repo && !payloadPath) || (payloadPath && !repo)) fail('go requires both --repo and --pr, or neither');
+  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants };
+}
+
+// Run through current/, this file's realpath is a snapshot under <install>/versions/<v>/, which
+// holds only tools/ and package.json; commands with no --root (version, update, self-hosted
+// runs) must still target the install checkout itself, never the snapshot.
+export function defaultRoot(dir){
+  return path.basename(path.dirname(dir))==='versions'?path.dirname(path.dirname(dir)):dir;
+}
+
 async function warnProjectVersionMismatch(root){
   let pointer;
   try{pointer=JSON.parse(await fs.readFile(path.join(root,'.project-swarm.json'),'utf8'));}catch{return;}
@@ -1079,10 +1127,10 @@ async function warnProjectVersionMismatch(root){
 }
 
 async function main() {
-  const args=process.argv.slice(2);let root=path.join(path.dirname(fileURLToPath(import.meta.url)),'..');
+  const args=process.argv.slice(2);let root=defaultRoot(ownRoot);
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME --pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='version'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
@@ -1187,6 +1235,12 @@ async function main() {
     const flags=rest.splice(0,rest.length);
     shipFlags=parseShipFlags(flags);
   }
+  // go's flags are parsed and validated up front, for the same reason as ship.
+  let goFlags=null;
+  if(command==='go'){
+    const flags=rest.splice(0,rest.length);
+    goFlags=parseGoFlags(flags);
+  }
   // inspect's --results is a read-only reduced view; stripped here for the same reason as above.
   let resultsOnly=false;
   if(command==='inspect'){
@@ -1196,7 +1250,7 @@ async function main() {
       rest.push(flag);
     }
   }
-  if(rest.length||!['doctor','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
+  if(rest.length||!['doctor','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship','go'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):!argument))fail('Invalid arguments; use --help');
   root=await fs.realpath(root);let result;
   if(command==='monitor'&&view){
     let status='running';
@@ -1233,24 +1287,35 @@ async function main() {
     const manifest=JSON.parse(bytes);
     if(command==='preflight')result=await (await import('./preflight.mjs')).preflightProject(root,manifest);
     else if(command==='validate')result=await validateProject(root,manifest);
-    else {
-      await validateProject(root,manifest);
-      for(const agent of new Set(manifest.jobs.map(job=>job.agent))){const check=await doctor({agent});if(check.configured===false)fail(`${agent} is not configured; run doctor ${agent}`);}
-      const controller=new AbortController(),abort=()=>controller.abort();
-      process.on('SIGINT',abort);process.on('SIGTERM',abort);let announced=false;
-      try{result=await runManifest(root,manifest,{signal:controller.signal,onState:state=>{if(!announced){announced=true;process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`);}}});}
-      finally{process.off('SIGINT',abort);process.off('SIGTERM',abort);}
-    }
+    else result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`));
   }else if(command==='status')result=await readState(root,argument);
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
   else if(command==='wait')result=await waitRun(root,argument,{timeoutMs:waitTimeoutSeconds!==null?waitTimeoutSeconds*1000:undefined});
   else if(command==='inspect')result=resultsOnly?await inspectResults(root,argument):await inspectRun(root,argument);
   else if(command==='cancel')result=await cancelRun(root,argument);
   else if(command==='ship')result=await shipRun(root,argument,shipFlags);
+  else if(command==='go'){
+    if(!ID.test(argument))await warnProjectVersionMismatch(root);
+    result=await go(root,argument,goFlags,{
+      run: async (goRoot,manifestPath)=>{
+        const bytes=await bytesAt(goRoot,manifestPath);if(!bytes)fail(`Missing manifest: ${manifestPath}`);
+        const state=await runManifestChecked(goRoot,JSON.parse(bytes));
+        return {id:state.id};
+      },
+      wait: (goRoot,id)=>waitRun(goRoot,id),
+      integrate: async (goRoot,id,opts)=>{
+        const manifest=validateManifest(JSON.parse(await bytesAt(goRoot,`.swarm/runs/${id}/manifest.json`,true)));
+        return integrateRun(goRoot,id,{mutants:opts.mutants||Boolean(manifest.mutants?.length)});
+      },
+      commit: (goRoot,files,message)=>commitOutputs(goRoot,files,message),
+      ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
+    });
+  }
   else result=await integrateRun(root,argument,{noChecks,mutants:useMutants});
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
   if(command==='ship'){if(shipExitCode(result.status)!==0)process.exitCode=1;return;}
+  if(command==='go'){if(goExitCode(result.status)!==0)process.exitCode=1;return;}
   if(['failed','cancelled'].includes(result.status))process.exitCode=1;
   if(command==='integrate'&&requireChecks&&(result.checksPassed===false||result.mutantsPassed===false))process.exitCode=1;
 }
