@@ -610,17 +610,27 @@ export async function cancelRun(root, id) {
 
 const MAX_NOTES = 20, MAX_NOTE_LEN = 500;
 
+const asObject = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
+const tryObject = text => { try { return asObject(JSON.parse(text)); } catch { return null; } };
+
 // The last line that parses as a JSON object, not merely the last non-empty line: a worker's
-// final structured result may follow ordinary trailing log lines.
-function parseFinalJson(text) {
+// final structured result may follow ordinary trailing log lines. Lessons #54/#58: workers often
+// wrap that line in backticks or put a (pretty-printed) object in a ```json fence, so a line's
+// surrounding backticks are stripped, and when no line parses, the last fenced block that holds
+// one JSON object wins.
+export function parseFinalJson(text) {
   if (typeof text !== 'string' || !text) return null;
   const lines = text.split('\n');
   for (let index = lines.length - 1; index >= 0; index--) {
-    const line = lines[index].trim();
+    const line = lines[index].trim().replace(/^`+|`+$/g, '').trim();
     if (!line) continue;
-    let value;
-    try { value = JSON.parse(line); } catch { continue; }
-    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    const value = tryObject(line);
+    if (value) return value;
+  }
+  const fences = [...text.matchAll(/```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g)];
+  for (let index = fences.length - 1; index >= 0; index--) {
+    const value = tryObject(fences[index][1].trim());
+    if (value) return value;
   }
   return null;
 }
