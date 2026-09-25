@@ -49,6 +49,7 @@ Unknown top-level fields are rejected.
 - `tierReason`: optional string, at most 2,000 characters. Required, and must be non-empty after trimming, whenever `tier` is `"expensive"`; the reason is what makes the choice inspectable instead of gut feel. Optional for `"cheap"`/`"mid"`.
 - `ignoreTests`: optional array of at most 100 explicit existing relative file paths, same path rules as `context`. Lists test files the job knowingly leaves uncovered by `context` — see "Context check" below. Give a reason in the `prompt` when you use it.
 - `after`: optional non-empty array of other job ids in the same manifest that must all reach `complete` before this job starts. See [After](#after) below.
+- `web`: optional, must be `true` when present. Adds `WebSearch`/`WebFetch` to the claude worker's `--tools` and passes `--allowedTools WebSearch,WebFetch` (without the latter the restricted CLI asks for approval and, with no prompt surface, refuses). Refused when `agent` is not `"claude"` (`web is only supported for the claude agent`) or when `outputs` is non-empty (`a web job must be read-only (no outputs)`) — a web job never gets `Write`, `Edit`, `Bash`, or any other tool. See [Scout](#scout) below.
 
 **Precedence:** an explicit per-job `model` always wins. `tier` is descriptive, coordinator-facing routing guidance for choosing which provider/model to put in `model` (or which worker pool to dispatch to); the runner itself does not map `tier` to a model. A job may set both: `model` decides what actually runs, `tier`/`tierReason` document why that choice was made. A manifest with no `tier` field behaves exactly as before.
 
@@ -86,6 +87,7 @@ node tools/swarm.mjs doctor openai
 node tools/swarm.mjs validate examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
 node tools/swarm.mjs ask --model sonnet --context src/a.js,src/b.js "question"
+node tools/swarm.mjs scout --model sonnet --brief docs/scout-brief-example.md "goal"
 node tools/swarm.mjs status <run-id>
 node tools/swarm.mjs monitor <run-id>
 node tools/swarm.mjs monitor <run-id> --view
@@ -127,6 +129,20 @@ node tools/swarm.mjs ask --model haiku --context src/renderer.js "Any obvious pe
 
 After installing into a project, use `coordination/swarm-smoke.json` and `coordination/swarm-parallel-review.json` in place of the standalone checkout's `examples/` paths. `--root` may appear before or after the command.
 
+## Scout
+
+`scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal"` runs one read-only `web: true` job (GitHub first) that searches for existing open-source code that already does the job named in `goal`, before a large build. The worker's agent is always `claude`; there is no `--agent` flag. Builders read only the report the runner writes, never web pages — web text is untrusted.
+
+It refuses with no `--model` (`scout requires --model`), no `--brief` (`scout requires --brief`), a missing brief file (`scout brief not found: <path>`), an empty goal (`scout requires a non-empty goal`), or `--max-picks` outside 1–30 (`--max-picks must be 1-30`). `context` (comma-separated) is added to the brief file as extra read-only files for the worker.
+
+The model returns one raw JSON line; the runner, not the model, applies the license gate (`normalizeScoutReport` in `tools/scout.mjs`): only the schema keys survive at every level, strings are trimmed and capped at 300 characters, a pick whose `url` does not start with `https://` is moved to `rejected` (`bad url`), a pick whose `license` is not one of `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `0BSD`, `Unlicense`, `Zlib`, `BSL-1.0`, or `MPL-2.0` is moved to `rejected` (`license not allowed: <license or none>`, name added to `moved`), a kept `MPL-2.0` pick gets `flag: "file-level copyleft"`, a `commit` that is not a 40-hex sha becomes `null` (never shortened, never guessed), invalid `stars`/`lastCommit`/`fit` are normalized, and picks beyond `--max-picks` are dropped after that gate.
+
+The runner writes `.swarm/scouts/<id>/report.json` (the normalized report plus `{id, goal, model, actualModel, createdAt}`) and `.swarm/scouts/<id>/report.md` (a table the runner renders — the model never writes markdown). It prints one JSON line: `{id,status,model,actualModel,modelMismatch,costUsd,report,reportMarkdown,picks,rejected,moved}`, where `report`/`reportMarkdown` are root-relative paths, `picks`/`rejected` are counts, and `moved` lists the pick names the gate moved to `rejected`. On a missing or invalid final JSON, `status` stays the run status, the counts are `0`, and the line adds `error: "scout returned no report"`. Exit code is `0` when the job completes, `1` otherwise. The run is saved under `.swarm/runs/` like any other. See [a generic example brief](scout-brief-example.md).
+
+```sh
+node tools/swarm.mjs scout --model sonnet --brief docs/scout-brief-example.md --max-picks 5 "Find a small retry/backoff library for outbound HTTP calls"
+```
+
 ## Saved records
 
 Each run uses these project-local locations:
@@ -144,6 +160,9 @@ Each run uses these project-local locations:
       stderr.log
   workspaces/<run-id>/<job-id>/
     ...explicitly copied files and proposed outputs
+  scouts/<run-id>/
+    report.json
+    report.md
 ```
 
 The exact prompt, model response, and provider events are local evidence, not material to publish automatically. Provider metadata may contain usage and actual model identifiers when the provider emits them. API records contain a normalized event, numeric usage, and model identifier rather than raw HTTP responses or headers. API cost is unavailable, not inferred. Missing metadata must be reported as unavailable, not inferred from a requested alias.

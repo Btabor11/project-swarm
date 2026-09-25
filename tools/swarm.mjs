@@ -13,6 +13,7 @@ import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, p
 import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
+import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown } from './scout.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS } from './ship.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
@@ -177,8 +178,14 @@ export function validateManifest(manifest) {
       if (job.agent === 'codex') fail('after is not supported for codex jobs yet');
     }
     if (job.timeoutMs !== undefined && (!Number.isInteger(job.timeoutMs) || job.timeoutMs < 50 || job.timeoutMs > 3600000)) fail('timeoutMs must be 50–3600000');
+    // web adds browsing tools to a restricted claude worker; it must stay read-only.
+    if (job.web !== undefined) {
+      if (job.web !== true) fail(`Invalid web field: ${job.id}`);
+      if (job.agent !== 'claude') fail('web is only supported for the claude agent');
+      if (job.outputs.length) fail('a web job must be read-only (no outputs)');
+    }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -211,7 +218,10 @@ function detectAfterCycle(jobs) {
 export function claudeArgs(job) {
   // Lesson #46 root cause: plan mode let a haiku-requested job run as sonnet for every event.
   // A read-only job (no outputs) gets no edit tools either way, so default mode is enough.
-  return ['-p', '--restricted', '--safe-mode', '--tools', job.outputs.length ? 'Read,Glob,Grep,Write,Edit' : 'Read,Glob,Grep', '--permission-mode', job.outputs.length ? 'acceptEdits' : 'default', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--no-chrome', '--output-format', 'stream-json', '--verbose', ...(job.model ? ['--model', job.model] : [])];
+  const tools = (job.outputs.length ? 'Read,Glob,Grep,Write,Edit' : 'Read,Glob,Grep') + (job.web ? ',WebSearch,WebFetch' : '');
+  // Without --allowedTools too, the restricted CLI asks for approval on WebSearch/WebFetch and,
+  // with no prompt surface, refuses (verified 2026-09-25).
+  return ['-p', '--restricted', '--safe-mode', '--tools', tools, '--permission-mode', job.outputs.length ? 'acceptEdits' : 'default', '--permission-prompts', 'none', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--no-chrome', '--output-format', 'stream-json', '--verbose', ...(job.web ? ['--allowedTools', 'WebSearch,WebFetch'] : []), ...(job.model ? ['--model', job.model] : [])];
 }
 
 export function stopChild(child, { killImpl = process.kill.bind(process) } = {}) {
@@ -946,6 +956,31 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
   return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, result: displayResult(parsed), ...(parsed === null ? { error: 'Worker returned no parsable final JSON' } : {}) };
 }
 
+// OASIS decision #112: a read-only web job (GitHub first) that returns raw JSON; the runner, not
+// the model, applies the license gate and writes the report — builders read only the report.
+export async function scoutRun(root, { model, brief, context = [], timeoutMs, maxPicks = 12, goal } = {}, runOptions = {}) {
+  if (typeof model !== 'string' || !model.trim()) fail('scout requires --model');
+  if (typeof brief !== 'string' || !brief.trim()) fail('scout requires --brief');
+  const briefBytes = await bytesAt(root, brief);
+  if (briefBytes === null) fail(`scout brief not found: ${brief}`);
+  if (typeof goal !== 'string' || !goal.trim()) fail('scout requires a non-empty goal');
+  if (!Number.isInteger(maxPicks) || maxPicks < 1 || maxPicks > 30) fail('--max-picks must be 1-30');
+  const id = `scout-${Date.now()}`;
+  const trimmedGoal = goal.trim();
+  const prompt = scoutPrompt({ brief: briefBytes.toString('utf8'), goal: trimmedGoal, maxPicks });
+  const job = { id, agent: 'claude', model, prompt, context: [...new Set([brief, ...context])], outputs: [], web: true, ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+  const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
+  const record = state.jobs[0];
+  const parsed = await jobFinalJson(root, id, id);
+  const normalized = normalizeScoutReport(parsed, { maxPicks });
+  const actualModel = record.actualModel ?? null;
+  const reportRelative = `.swarm/scouts/${id}/report.json`;
+  const markdownRelative = `.swarm/scouts/${id}/report.md`;
+  await jsonWrite(root, reportRelative, { ...normalized, id, goal: trimmedGoal, model, actualModel, createdAt: new Date().toISOString() });
+  await write(root, markdownRelative, renderScoutMarkdown(normalized, { goal: trimmedGoal, id, model }), true);
+  return { id, status: state.status, model, actualModel, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, report: reportRelative, reportMarkdown: markdownRelative, picks: normalized.picks.length, rejected: normalized.rejected.length, moved: normalized.moved, ...(parsed === null ? { error: 'scout returned no report' } : {}) };
+}
+
 export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform}={}){
   const [major,minor]=process.versions.node.split('.').map(Number);
   if(major<20||(major===20&&minor<3))fail('Node 20.3 or newer is required');
@@ -1281,7 +1316,7 @@ async function main() {
   const args=process.argv.slice(2);let root=defaultRoot(ownRoot);
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | board | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME --pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | board | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME --pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='version'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
@@ -1330,6 +1365,32 @@ async function main() {
     if(positionals.length!==1)fail('ask requires exactly one question argument; use --help');
     root=await fs.realpath(root);
     const result=await askRun(root,{model,context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]});
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if(result.status!=='complete')process.exitCode=1;
+    return;
+  }
+  // scout has its own flag/positional shape, like ask, and always runs as claude (no --agent flag).
+  if(args[0]==='scout'){
+    const flags=args.slice(1);
+    let model,briefArg,contextArg,timeoutSeconds,maxPicksArg;
+    const positionals=[];
+    for(let index=0;index<flags.length;index++){
+      const flag=flags[index];
+      if(flag==='--model'){model=flags[++index];continue;}
+      if(flag==='--brief'){briefArg=flags[++index];continue;}
+      if(flag==='--context'){contextArg=flags[++index];continue;}
+      if(flag==='--max-picks'){maxPicksArg=flags[++index];continue;}
+      if(flag==='--timeout'){
+        const next=flags[++index];
+        if(next===undefined||!/^\d+(\.\d+)?$/.test(next)||Number(next)<=0)fail('--timeout requires a positive number of seconds');
+        timeoutSeconds=Number(next);
+        continue;
+      }
+      positionals.push(flag);
+    }
+    if(positionals.length!==1)fail('scout requires exactly one goal argument; use --help');
+    root=await fs.realpath(root);
+    const result=await scoutRun(root,{model,brief:briefArg,context:contextArg?contextArg.split(','):[],timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,maxPicks:maxPicksArg!==undefined?Number(maxPicksArg):undefined,goal:positionals[0]});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if(result.status!=='complete')process.exitCode=1;
     return;
