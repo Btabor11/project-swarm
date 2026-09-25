@@ -88,6 +88,7 @@ node tools/swarm.mjs validate examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
 node tools/swarm.mjs ask --model sonnet --context src/a.js,src/b.js "question"
 node tools/swarm.mjs scout --model sonnet --brief docs/scout-brief-example.md "goal"
+node tools/swarm.mjs sweep --model sonnet --brief docs/scout-brief-example.md --goals docs/sweep-goals-example.json
 node tools/swarm.mjs status <run-id>
 node tools/swarm.mjs monitor <run-id>
 node tools/swarm.mjs monitor <run-id> --view
@@ -143,6 +144,26 @@ The runner writes `.swarm/scouts/<id>/report.json` (the normalized report plus `
 node tools/swarm.mjs scout --model sonnet --brief docs/scout-brief-example.md --max-picks 5 "Find a small retry/backoff library for outbound HTTP calls"
 ```
 
+## Sweep
+
+`sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS]` runs read-only `gh api`-only GitHub research across many areas (tickets) at once, instead of one goal at a time like `scout`. `--goals` is a JSON file `{"areas": [{"area": "t19-ui", "ticket": "T19", "goal": "...", "queries": ["topic:react-component license:mit stars:>300 pushed:>2025-09-01", ...]}, ...]}`: 1–20 areas, each `area` matching `^[a-z0-9-]{1,40}$` with a unique name, a non-empty `ticket` and `goal`, and at least one non-empty `queries` string. See [a generic example](sweep-goals-example.json).
+
+It refuses with no `--model` (`sweep requires --model`), no `--brief`/a missing brief file, no `--goals`/a missing or invalid goals file, or a missing `--known` file. Defaults: `--concurrency 3`, `--top 3` (hard max 3, silently clamped), `--candidates 25` per area after dedupe (hard max 50, silently clamped), `--max-usd 15`, `--timeout 900` seconds. `--known` is a comma-separated list of files whose `https://github.com/<owner>/<repo>` URLs are extracted and skipped everywhere (case-insensitive on owner/repo) — already-rated repos never reappear.
+
+For each area, every query's `gh api -X GET search/repositories -f q=<query> -f per_page=50` results are merged, deduped, known repos removed, ranked by stars and recency, and cut to `--candidates` before anything else is fetched — enrichment cost is bounded by that cap, not by how many raw hits came back. Each surviving candidate is enriched with `gh api repos/<o>/<r>`, `.../commits/<default_branch>`, `.../releases/latest`, and `.../contents/<path>` (only `.github/workflows`, `package.json`, `pyproject.toml`, the top-level listing, and `setup.py`'s presence in it) — every call an argv array with no shell, and the child process never receiving `GITHUB_TOKEN`/`GH_TOKEN` (the parent environment minus those two; `gh` reads its own credentials). An OpenSSF Scorecard is a plain unauthenticated fetch to `https://api.securityscorecards.dev/projects/github.com/<o>/<r>`; a missing score is `null`, never an error.
+
+The gate (`tools/sweep.mjs`, all in code, none of it the model) drops an archived repo (`archived`), a fork (`fork`), or a license outside `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `MPL-2.0`, `0BSD`, `Unlicense` (`license`) before the model ever sees it; a kept `MPL-2.0` candidate gets flag `weak-copyleft`. Other flags are computed the same way: `install-scripts` (a `preinstall`/`install`/`postinstall` script, or Python's `setup.py`), `stale` (not pushed in 365 days), `no-ci` (no files under `.github/workflows`), `no-tests` (no top-level `test`/`tests`/`__tests__`/`spec`).
+
+One claude job per area (the existing scout machinery, no web tools — the candidates gathered by `gh api` are the only GitHub data the model sees, embedded directly in its prompt as labelled untrusted data, never as instructions), prompt from `sweepPrompt({brief, area, ticket, goal, top})`, `outputs: []`. The model returns `{area, picks: [{fullName, reasons: [..≤3], hoursToAdopt, fit: "drop-in"|"adapt"|"reference-only", where, risk}], rejected: [{fullName, reason}]}`; `normalizeSweepArea` keeps at most `top` (hard-capped at 3) picks, drops (moves to `rejected`, reason `not a candidate`) any pick whose `fullName` is not one of that area's candidates, drops (reason `invalid hoursToAdopt`) any pick whose `hoursToAdopt` is not a finite number 0.5–400, and always overwrites `license`, `commit`, `url`, `stars`, `scorecard`, and `flags` with the matching candidate's own values — the model can never set a license or a pin.
+
+Before launching an area's job, if spending so far has already reached `--max-usd`, that area is `skipped` outright (no `gh api` calls, no job); areas already running are never killed. Areas run with the given `--concurrency`. It writes `.swarm/sweeps/<id>/candidates/<area>.json`, `areas/<area>.json`, `shortlist.json` (`{id, createdAt, model, areas: [{area, ticket, picks: [{fullName, url, license, commit, hoursToAdopt, fit, reasons, risk, where, stars, scorecard, flags}]}], skipped, costUsd}`), and `shortlist.md` (one `## <area> (<ticket>)` table — `| Pick | License | Pin | Hours to adopt | Fit | Why | Risk | Flags |`, at most 3 rows — per area, then a `Skipped:` line).
+
+It prints one JSON line: `{id, status, costUsd, areas: [{area, status, picks, costUsd}], skipped: [area...], shortlist, shortlistMarkdown}`, where `status` is `complete` (every area completed), `partial` (some area failed or was skipped by the cost cap), or `failed` (no area completed). Exit code is `0` when `status` is `complete`, `1` otherwise. Sweep results are prior-art data, not an adopted decision: a human still reviews `shortlist.md` and says yes before any pick is actually pulled into the project.
+
+```sh
+node tools/swarm.mjs sweep --model sonnet --brief docs/scout-brief-example.md --goals docs/sweep-goals-example.json --max-usd 10 --concurrency 3
+```
+
 ## Saved records
 
 Each run uses these project-local locations:
@@ -163,6 +184,11 @@ Each run uses these project-local locations:
   scouts/<run-id>/
     report.json
     report.md
+  sweeps/<sweep-id>/
+    candidates/<area>.json
+    areas/<area>.json
+    shortlist.json
+    shortlist.md
 ```
 
 The exact prompt, model response, and provider events are local evidence, not material to publish automatically. Provider metadata may contain usage and actual model identifiers when the provider emits them. API records contain a normalized event, numeric usage, and model identifier rather than raw HTTP responses or headers. API cost is unavailable, not inferred. Missing metadata must be reported as unavailable, not inferred from a requested alias.
