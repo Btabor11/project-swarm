@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters.mjs';
 
-import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, parseCodexResult, codexExtraFinalJsonKeys, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
+import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS } from './ship.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
@@ -311,12 +311,14 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       const cleanupError=cleanup.error;
       if(cleanupError){child?.unref();child?.stdin?.destroy();child?.stdout?.destroy();child?.stderr?.destroy();}
       if(job.agent === 'codex') {
-        let response = '', envelopeInvalid = false, failed = cleanupError || reason || error?.message || (code !== 0 ? `Codex exited ${code}` : null);
-        if (!failed) try {
+        let response = '', envelopeInvalid = false, envelopeFallback = null, failed = cleanupError || reason || error?.message || (code !== 0 ? `Codex exited ${code}` : null);
+        if (!failed) {
           response = (await bytesAt(cwd, codex.resultRelative, true))?.toString('utf8') ?? '';
-          parseCodexResult(response, job.outputs);
-        } catch (problem) { failed = problem.message; envelopeInvalid = true; }
-        resolve({ cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, stdout, stderr, response, exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
+          const resolved = await resolveCodexEnvelope(response, cwd, codex.resultRelative, job);
+          if (resolved) envelopeFallback = resolved.fallback;
+          else { failed = 'Invalid Codex result envelope'; envelopeInvalid = true; }
+        }
+        resolve({ cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, envelopeFallback, stdout, stderr, response, exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
         return;
       }
       if(EXTRA_CLI_AGENTS.includes(job.agent)){
@@ -394,6 +396,12 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
       }
       for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
     }
+    // Lesson #64: a completed job that only resolved through the result-file or worktree
+    // fallback keeps its worktree too, since its envelope was reconstructed, not reported.
+    if (result.envelopeFallback) {
+      keepWorktree = true;
+      result.keptWorkspace = worktree;
+    }
     // Lesson #41: a clean exit with an invalid final envelope is the only evidence of what codex
     // actually did, so the worktree stays on disk instead of being discarded with everything else.
     if (result.envelopeInvalid) {
@@ -464,7 +472,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         if (job.outputs.includes(file)) { baseHashes[file] = bytes === null ? null : digest(bytes); baseModes[file]=mode; }
         if (bytes !== null && job.agent !== 'codex') await write(workspaceRoot, file, bytes, false, mode);
       }
-      state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, workspace, outputs: job.outputs, baseHashes, baseModes, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', progress: null, keptWorkspace: null });
+      state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, workspace, outputs: job.outputs, baseHashes, baseModes, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', progress: null, keptWorkspace: null, envelopeFallback: null });
     }
     await save();
 
@@ -548,7 +556,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         await write(root, `${directory}/${job.id}/provider.jsonl`, result.stdout, true);
         await write(root, `${directory}/${job.id}/stderr.log`, result.stderr, true);
         await write(root, `${directory}/${job.id}/response.txt`, result.response, true);
-        Object.assign(record, { status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
+        Object.assign(record, { status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
         await queueSave();
       } finally { await settle(index); }
     };
@@ -639,6 +647,10 @@ const displayResult = value => !value ? null : !Array.isArray(value.notes) ? val
 // Lesson #46: surfaced to the coordinator without failing the job, since a mismatch is evidence
 // about what ran, not proof the work is wrong.
 const modelMismatchWarnings = state => state.jobs.filter(job => job.modelMismatch).map(job => `model mismatch: ${job.id} asked ${job.model}, ran ${job.actualModel}`);
+// Lesson #64: a job that only completed through the result-file or worktree fallback surfaces
+// which one, since its envelope was reconstructed rather than reported.
+const codexEnvelopeFallbackWarnings = state => state.jobs.filter(job => job.envelopeFallback).map(job => `codex envelope fallback: ${job.envelopeFallback} (${job.id})`);
+const runWarnings = state => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state)];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;
@@ -670,7 +682,7 @@ export async function waitRun(root, id, { timeoutMs, pollMs = 1000, sleep = ms =
     if (costUsd !== null) { total += costUsd; any = true; }
     jobs.push({ id: record.id, status: record.status, costUsd, tokens: jobTokens(record), notes: cappedNotes(parsed) });
   }
-  return { runId: id, status: state.status, durationMs: summarizeRun(state, now()).elapsedMs, costUsd: any ? total : null, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings: modelMismatchWarnings(state), jobs };
+  return { runId: id, status: state.status, durationMs: summarizeRun(state, now()).elapsedMs, costUsd: any ? total : null, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings: runWarnings(state), jobs };
 }
 
 // {integrated}/{integrated:.ext} and {new}/{new:.ext} must each be a whole argv item; a
@@ -856,9 +868,6 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
       await resolveReadPaths(job.readPaths);
       const files = await codexDirtyFiles(root, job);
       if (files.length) warnings.push({ code: 'codex-uncommitted-files', jobId: job.id, files, message: 'Codex starts from HEAD; uncommitted changes to these declared files are not included.' });
-      // Lesson #41: parseCodexResult only ever accepts {files_changed,notes}; a prompt asking codex
-      // for other final-JSON keys is always going to fail that envelope check.
-      if (codexExtraFinalJsonKeys(job.prompt)) warnings.push({ code: 'codex-extra-final-keys', jobId: job.id, message: `codex job ${job.id}: final JSON may only hold files_changed and notes; put extra fields inside notes` });
     }
     let bytes=0;
     const files=[];
@@ -904,7 +913,7 @@ export async function inspectRun(root,id){
       files.push({job:job.id,jobStatus:record.status,path:file,baseHash:record.baseHashes[file],currentHash,proposedHash,bytes:proposed?.length??0,status:record.status!=='complete'?'blocked':proposed===null?'missing':state.integratedAt&&currentHash===proposedHash?'applied':conflict?'conflict':currentHash===proposedHash?'unchanged':'ready'});
     }
   }
-  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:modelMismatchWarnings(state),jobs,files};
+  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:runWarnings(state),jobs,files};
 }
 
 // Lesson #48: a coordinator asking only "did it work, what did it say" should not have to
@@ -918,7 +927,7 @@ export async function inspectResults(root, id) {
     const parsed = await jobFinalJson(root, id, record.id);
     jobs.push({ id: record.id, status: record.status, model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, tokens: jobTokens(record), result: displayResult(parsed) });
   }
-  return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings: modelMismatchWarnings(state), jobs };
+  return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings: runWarnings(state), jobs };
 }
 
 // Lesson #48: a single read-only question does not deserve a hand-written manifest; ask builds

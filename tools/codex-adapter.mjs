@@ -59,22 +59,64 @@ export function codexMessage(job, { contract = null } = {}) {
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
   return `${base}${contractSection}TASK:\n${job.prompt}\n`;
 }
-export function parseCodexResult(text, outputs) {
-  let value;
-  try { value = JSON.parse(text.trim()); } catch { throw Error('Codex final message is not a JSON result'); }
-  if (!value || typeof value !== 'object' || Object.keys(value).sort().join(',') !== 'files_changed,notes' ||
-      !Array.isArray(value.files_changed) || !Array.isArray(value.notes) || value.notes.some(note => typeof note !== 'string') ||
-      value.files_changed.some(file => typeof file !== 'string' || !outputs.includes(file)) || new Set(value.files_changed).size !== value.files_changed.length) throw Error('Invalid Codex result envelope');
-  return value;
+const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
+const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;
+function lastFencedObject(text) {
+  const fences = [...text.matchAll(CODEX_FENCE)];
+  for (let index = fences.length - 1; index >= 0; index--) {
+    const value = tryObject(fences[index][1].trim());
+    if (value) return value;
+  }
+  return null;
 }
-const CODEX_FINAL_JSON = /\{[^{}]*"files_changed"[^{}]*\}/;
-// Lesson #41: a coordinator prompt that asks codex for extra final-JSON keys always fails
-// parseCodexResult's strict {files_changed,notes} envelope; validate should catch this early.
-export function codexExtraFinalJsonKeys(prompt) {
-  const match = CODEX_FINAL_JSON.exec(typeof prompt === 'string' ? prompt : '');
-  if (!match) return false;
-  const keys = [...match[0].matchAll(/"([a-zA-Z_][a-zA-Z0-9_]*)"\s*:/g)].map(m => m[1]);
-  return keys.some(key => key !== 'files_changed' && key !== 'notes');
+// Depth-aware so a value that itself contains braces never ends a candidate object early.
+function lastTopLevelObject(text) {
+  const candidates = [];
+  let depth = 0, start = -1, inString = false, escape = false;
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    if (inString) { if (escape) escape = false; else if (ch === '\\') escape = true; else if (ch === '"') inString = false; continue; }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') { if (depth === 0) start = index; depth++; }
+    else if (ch === '}' && depth > 0) { depth--; if (depth === 0 && start !== -1) { candidates.push(text.slice(start, index + 1)); start = -1; } }
+  }
+  for (let index = candidates.length - 1; index >= 0; index--) {
+    const value = tryObject(candidates[index]);
+    if (value) return value;
+  }
+  return null;
+}
+// Braden's rule (lessons #41, #64): the reply's last fenced (```json or bare ```) block wins
+// when the reply has one; otherwise its last top-level JSON object. Earlier blocks never win
+// over a later one, and any keys are accepted — declared outputs, not envelope keys, gate
+// what integrates.
+export function parseCodexReply(text) {
+  if (typeof text !== 'string' || !text) return null;
+  if (text.includes('```')) {
+    const fenced = lastFencedObject(text);
+    if (fenced) return fenced;
+  }
+  return lastTopLevelObject(text);
+}
+// Lesson #64: when the reply itself yields nothing, the same `-o` file is re-read directly in
+// case only the captured reply text, not the file, was empty or truncated.
+export async function codexResultFile(worktree, resultRelative) {
+  try { return tryObject((await fs.readFile(path.join(worktree, resultRelative), 'utf8')).trim()); }
+  catch { return null; }
+}
+// Scoped to outputs only (never context) so a fallback result can never widen what integrates.
+export async function codexWorktreeFallback(worktree, job) {
+  const files = await codexDirtyFiles(worktree, { context: [], outputs: job.outputs });
+  return files.length ? { filesChanged: files, fallback: 'worktree' } : null;
+}
+export async function resolveCodexEnvelope(response, worktree, resultRelative, job) {
+  const reply = parseCodexReply(response);
+  if (reply) return { result: reply, fallback: null };
+  const fromFile = await codexResultFile(worktree, resultRelative);
+  if (fromFile) return { result: fromFile, fallback: 'result-file' };
+  const fromWorktree = await codexWorktreeFallback(worktree, job);
+  if (fromWorktree) return { result: fromWorktree, fallback: 'worktree' };
+  return null;
 }
 export function codexUsage(output) {
   const matches = [...output.matchAll(/\btokens used\s*\n?\s*([0-9][0-9,]*)\s*(?=\n|$)/gi)];
