@@ -72,7 +72,8 @@ export function normalizeScoutReport(raw, { maxPicks = 12 } = {}) {
   return { picks: kept.slice(0, maxPicks), rejected: rejected.slice(0, 20), top, moved };
 }
 
-const escapeCell = value => (value === null || value === undefined ? '' : String(value).replace(/\|/g, '\\|'));
+// Backslashes first, then pipes, so `\|` in the input cannot close a cell; newlines would end the row.
+const escapeCell = value => (value === null || value === undefined ? '' : String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' '));
 
 export function renderScoutMarkdown(report, { goal, id, model }) {
   const picks = Array.isArray(report?.picks) ? report.picks : [];

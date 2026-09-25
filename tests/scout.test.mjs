@@ -191,3 +191,11 @@ test('scoutRun launches the worker with web tools and no write tools', async t =
   assert.ok(!tools.includes('Write') && !tools.includes('Edit') && !tools.includes('Bash'));
   assert.equal(args[args.indexOf('--allowedTools') + 1], 'WebSearch,WebFetch');
 });
+
+test('renderScoutMarkdown escapes backslashes before pipes and flattens newlines, so a cell cannot break the table', () => {
+  const markdown = renderScoutMarkdown({ picks: [{ name: 'a\\|b', url: 'https://github.com/o/a', license: 'MIT', fit: 'drop-in', gives: 'line one\nline two' }], rejected: [], top: [] }, { goal: 'g', id: 'scout-1', model: 'sonnet' });
+  const row = markdown.split('\n').find(line => line.startsWith('| a'));
+  assert.ok(row.includes('a\\\\\\|b'));
+  assert.ok(row.includes('line one line two'));
+  assert.equal(row.split(/(?<!\\)\|/).length - 2, 9);
+});
