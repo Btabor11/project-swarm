@@ -62,9 +62,11 @@ export function referencePatterns(outputPath) {
   return patterns;
 }
 
+// Outside a git repo this fails and falls back to a walk; git's own "fatal: not a git repository"
+// must not leak onto the coordinator's stderr (lesson #57).
 function tryGitLsFiles(root) {
   try {
-    const out = execFileSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8' });
+    const out = execFileSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     return out.split('\0').filter(Boolean);
   } catch {
     return null;
