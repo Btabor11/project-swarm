@@ -1,0 +1,22 @@
+{
+  "areas": [
+    {
+      "area": "t19-ui",
+      "ticket": "T19",
+      "goal": "Find a small, dependency-light React component library for a settings form",
+      "queries": [
+        "topic:react-component-library license:mit stars:>300 pushed:>2025-09-01",
+        "settings form react in:name,description license:mit stars:>100"
+      ]
+    },
+    {
+      "area": "t20-api",
+      "ticket": "T20",
+      "goal": "Find a small retry/backoff library for outbound Node fetch calls",
+      "queries": [
+        "topic:retry topic:backoff language:javascript stars:>200 pushed:>2025-06-01",
+        "fetch retry backoff in:name,description language:typescript stars:>100"
+      ]
+    }
+  ]
+}
