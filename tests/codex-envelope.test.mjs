@@ -72,3 +72,31 @@ test('no reply JSON, no result file, and no changed outputs resolves to nothing 
   assert.equal(resolved, null);
   assert.equal(await codexWorktreeFallback(root, { outputs: ['output.txt'] }), null);
 });
+
+test('worktree fallback is scoped to outputs only: a dirty context file alone resolves to nothing', async t => {
+  const root = await gitRepo(t, { 'input.txt': 'committed context', 'output.txt': 'committed output' });
+  await fs.writeFile(path.join(root, 'input.txt'), 'dirty context');
+  const job = { context: ['input.txt'], outputs: ['output.txt'] };
+  assert.equal(await codexWorktreeFallback(root, job), null);
+  const resolved = await resolveCodexEnvelope('not json', root, '.swarm-codex-result-missing.json', job);
+  assert.equal(resolved, null);
+});
+
+test('worktree fallback with both a dirty output and a dirty context file reports exactly the output', async t => {
+  const root = await gitRepo(t, { 'input.txt': 'committed context', 'output.txt': 'committed output' });
+  await fs.writeFile(path.join(root, 'input.txt'), 'dirty context');
+  await fs.writeFile(path.join(root, 'output.txt'), 'dirty output');
+  const job = { context: ['input.txt'], outputs: ['output.txt'] };
+  const resolved = await resolveCodexEnvelope('not json', root, '.swarm-codex-result-missing.json', job);
+  assert.deepEqual(resolved, { result: { filesChanged: ['output.txt'], fallback: 'worktree' }, fallback: 'worktree' });
+});
+
+test('an unfenced reply with two top-level objects returns the later one, not the first (lastTopLevelObject)', () => {
+  const text = `For example, a reply might look like {"notes":"example"}.\nHere is the actual result:\n${ac27Reply}\n`;
+  assert.deepEqual(parseCodexReply(text), JSON.parse(ac27Reply));
+});
+
+test('an unfenced reply where the last top-level candidate is invalid JSON falls back to the earlier valid one', () => {
+  const text = `${ubBuildReply}\nA trailing aside: {oops: true,}\n`;
+  assert.deepEqual(parseCodexReply(text), JSON.parse(ubBuildReply));
+});
