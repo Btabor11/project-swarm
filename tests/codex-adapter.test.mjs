@@ -5,8 +5,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { CODEX_FLAGS, codexArgs, codexMessage, codexProfile, codexEnvironment, codexUsage, parseCodexResult, validateReadPaths, resolveReadPaths, git } from '../tools/codex-adapter.mjs';
-import { validateManifest, validateProject, runManifest, inspectRun, integrateRun, doctor, cancelRun } from '../tools/swarm.mjs';
+import { CODEX_FLAGS, codexArgs, codexMessage, codexProfile, codexEnvironment, codexUsage, parseCodexReply, validateReadPaths, resolveReadPaths, git } from '../tools/codex-adapter.mjs';
+import { validateManifest, validateProject, runManifest, inspectRun, waitRun, integrateRun, doctor, cancelRun } from '../tools/swarm.mjs';
 import { preflightProject } from '../tools/preflight.mjs';
 
 const job = (overrides = {}) => ({ id: 'writer', agent: 'codex', model: 'test-model', prompt: 'Update the output and test it.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 5000, ...overrides });
@@ -121,9 +121,10 @@ test('TLS environment uses certificate file when present and preserves environme
   assert.deepEqual(await codexEnvironment({ PATH: '/bin' }, async () => false), { PATH: '/bin' });
 });
 
-test('result envelope and token parser refuse malformed data without inventing usage', () => {
-  assert.deepEqual(parseCodexResult(envelope, ['output.txt']).files_changed, ['output.txt']);
-  for (const text of ['not json', '{}', '{"files_changed":["other"],"notes":[]}', '{"files_changed":[],"notes":[1]}', '{"files_changed":["output.txt","output.txt"],"notes":[]}']) assert.throws(() => parseCodexResult(text, ['output.txt']));
+test('the reply envelope accepts any object (lesson #64) and the token parser invents no usage', () => {
+  assert.deepEqual(parseCodexReply(envelope), { files_changed: ['output.txt'], notes: ['Fake worker completed.'] });
+  assert.deepEqual(parseCodexReply(JSON.stringify({ filesChanged: ['output.txt'], testsAdded: 3, crossJobNames: [], notes: 'done' })), { filesChanged: ['output.txt'], testsAdded: 3, crossJobNames: [], notes: 'done' });
+  for (const text of ['not json', '[1,2]', '', undefined]) assert.equal(parseCodexReply(text), null);
   assert.deepEqual(codexUsage('tokens used\n1,234\n'), { total_tokens: 1234 });
   assert.equal(codexUsage('no usage'), null);
 });
@@ -148,7 +149,7 @@ test('HEAD worktree runs with null stdin, collects only declared outputs, integr
   await assert.rejects(fs.access(path.join(root, 'extra.txt')));
 });
 
-for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope which is kept (lesson #41)`, async t => {
+for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope with no worktree evidence, which is kept (lessons #41, #64)`, async t => {
   const root = await fixture(t);
   let launched = false;
   const controller = new AbortController();
@@ -191,12 +192,31 @@ test('Codex proposals retain ordinary conflict detection', async t => {
   await assert.rejects(integrateRun(root, state.id), /Integration conflict/);
 });
 
-test('validate warns when a codex prompt asks for final-JSON keys beyond files_changed and notes (lesson #41)', async t => {
+test('a reply with extra final-JSON keys beyond files_changed/notes completes cleanly, not just with a warning (lesson #64)', async t => {
   const root = await fixture(t);
-  const withExtra = manifest({ prompt: 'Finish with one JSON line {"files_changed":[...],"summary":"what you did"}.' });
-  assert.deepEqual((await validateProject(root, withExtra)).warnings, [{ code: 'codex-extra-final-keys', jobId: 'writer', message: 'codex job writer: final JSON may only hold files_changed and notes; put extra fields inside notes' }]);
-  const onlyDeclared = manifest({ prompt: 'Finish with one JSON line {"files_changed":[...],"notes":[...]}.' });
-  assert.deepEqual((await validateProject(root, onlyDeclared)).warnings, []);
+  const extraEnvelope = JSON.stringify({ filesChanged: ['output.txt'], testsAdded: 2, crossJobNames: [], notes: 'Fake worker completed.' });
+  const script = `fs.writeFileSync('output.txt','proposed');fs.writeFileSync(result,${JSON.stringify(extraEnvelope)});`;
+  const plan = manifest({ prompt: 'Finish with one JSON line {"filesChanged":[...],"testsAdded":n,"crossJobNames":[...],"notes":"..."}.' });
+  const state = await runManifest(root, plan, { platform: 'darwin', spawnImpl: fake(script) });
+  assert.equal(state.status, 'complete', state.error ?? state.jobs[0]?.error);
+  assert.equal(state.jobs[0].envelopeFallback, null);
+  assert.deepEqual((await validateProject(root, plan)).warnings, []);
+});
+
+test('a reply with no parseable JSON but worktree changes to declared outputs falls back to a worktree result and keeps the worktree (lesson #64)', async t => {
+  const root = await fixture(t);
+  const script = `fs.writeFileSync('output.txt','proposed');fs.writeFileSync('other.txt','undeclared edit');fs.writeFileSync(result,'no JSON in this reply, just prose');`;
+  const state = await runManifest(root, manifest(), { platform: 'darwin', spawnImpl: fake(script) });
+  assert.equal(state.status, 'complete', state.error ?? state.jobs[0]?.error);
+  assert.equal(state.jobs[0].envelopeFallback, 'worktree');
+  const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/writer');
+  await fs.access(worktree);
+  assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(worktree), true);
+  assert.equal(state.jobs[0].keptWorkspace, worktree);
+  assert.deepEqual((await inspectRun(root, state.id)).warnings, [`codex envelope fallback: worktree (writer)`]);
+  assert.deepEqual((await waitRun(root, state.id)).warnings, [`codex envelope fallback: worktree (writer)`]);
+  assert.deepEqual((await integrateRun(root, state.id)).files, ['output.txt']);
+  assert.equal(await fs.readFile(path.join(root, 'other.txt'), 'utf8'), 'unassigned source');
 });
 
 test('validate and preflight warn about staged, unstaged, untracked and ignored declared paths only', async t => {
