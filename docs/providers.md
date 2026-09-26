@@ -94,6 +94,20 @@ Under a top-level `boxChecks` object, each check is a named entry:
 
 A job's `boxChecks` field names the subset of checks it can invoke: `"boxChecks": ["test-name"]`.
 
+### Repository base layer (`boxBase`)
+
+A box normally receives only the worker's declared files, which is enough to run a check against the files a job touches but not enough for a check — such as a full `vitest` run — that needs the rest of the repository. An optional top-level `boxBase` names a repo the Helm worker knows, so the sandbox stages a `git archive` of it before the worker's own files are synced on top:
+```json
+{
+  "boxChecks": { "test-name": { "argv": ["npx", "vitest", "run"] } },
+  "boxBase": { "repo": "cluer-helm" }
+}
+```
+- `repo`: a name registered on the Helm worker side (pattern `^[a-z0-9][a-z0-9._-]{0,63}$`); it never carries an endpoint, credential, or path, matching the rule that manifests carry no endpoints or credentials.
+- `boxBase` is only a legal manifest field when the manifest declares `boxChecks` somewhere (top-level or on a job); otherwise it is refused as an unknown field.
+- The runner resolves the ref once at run start, to the project root's `git rev-parse HEAD` (a full sha), and records `{repo, ref}` in the run status (`state.boxBase`) so every box in the run stages the exact commit the run itself was built against.
+- Without `boxBase`, box creation is unchanged: no `base` field is sent to the Helm box API.
+
 ### Configuration
 
 Configure via local environment outside the manifest (never include credentials in manifests):

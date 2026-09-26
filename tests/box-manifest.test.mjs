@@ -8,12 +8,22 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { runManifest, validateManifest, claudeArgs, inspectRun, waitRun } from '../tools/swarm.mjs';
+import { runManifest, validateManifest, claudeArgs, inspectRun, waitRun, resolveBoxBase } from '../tools/swarm.mjs';
+import { git } from '../tools/codex-adapter.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'project-swarm-box-test-'));
   await fs.writeFile(path.join(root, 'input.txt'), 'original');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+// A fixture that is also a real git repo, so boxBase ref resolution has a HEAD to resolve.
+async function gitFixture(t) {
+  const root = await fs.realpath(await fixture(t));
+  await git(root, ['init']);
+  await git(root, ['add', 'input.txt']);
+  await git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture']);
   return root;
 }
 
@@ -145,4 +155,66 @@ test('inspectRun and waitRun leave a job without boxChecks exactly as before: no
   const waited = await waitRun(root, state.id);
   assert.equal('boxCalls' in waited.jobs[0], false);
   assert.deepEqual(waited.warnings, []);
+});
+
+// --- boxBase validation --------------------------------------------------------------------
+
+test('boxBase: refused as an unknown field when there are no boxChecks anywhere', () => {
+  assert.throws(() => validateManifest({ ...manifest(), boxBase: { repo: 'cluer-helm' } }), /Unknown manifest field: boxBase/);
+});
+
+test('boxBase: valid once boxChecks exists at the top level, even unreferenced by any job', () => {
+  assert.doesNotThrow(() => validateManifest({ ...manifest(undefined, { lint: LINT }), boxBase: { repo: 'cluer-helm' } }));
+  assert.doesNotThrow(() => validateManifest({ ...manifest([job({ boxChecks: ['lint'] })], { lint: LINT }), boxBase: { repo: 'cluer-helm' } }));
+});
+
+test('boxBase: validates shape and the repo pattern', () => {
+  const withBoxChecks = boxBase => ({ ...manifest(undefined, { lint: LINT }), boxBase });
+  assert.throws(() => validateManifest(withBoxChecks([])), /boxBase must be an object/);
+  assert.throws(() => validateManifest(withBoxChecks({ repo: 'cluer-helm', extra: 1 })), /Unknown boxBase field: extra/);
+  assert.throws(() => validateManifest(withBoxChecks({ repo: 'Cluer-Helm' })), /Invalid boxBase\.repo/);
+  assert.throws(() => validateManifest(withBoxChecks({ repo: '.hidden' })), /Invalid boxBase\.repo/);
+  assert.throws(() => validateManifest(withBoxChecks({ repo: 'a'.repeat(65) })), /Invalid boxBase\.repo/);
+  assert.throws(() => validateManifest(withBoxChecks({})), /Invalid boxBase\.repo/);
+  assert.doesNotThrow(() => validateManifest(withBoxChecks({ repo: 'cluer-helm' })));
+  assert.doesNotThrow(() => validateManifest(withBoxChecks({ repo: 'a' })));
+});
+
+// --- boxBase ref resolution ------------------------------------------------------------------
+
+test('resolveBoxBase: null without boxBase, and refuses a non-git project root', async t => {
+  const root = await fixture(t);
+  assert.equal(await resolveBoxBase(root, manifest()), null);
+  await assert.rejects(() => resolveBoxBase(root, { boxBase: { repo: 'cluer-helm' } }), /requires a git repository/);
+});
+
+test('resolveBoxBase: resolves to the project root\'s full HEAD sha in a temp git repo', async t => {
+  const root = await gitFixture(t);
+  const expected = (await git(root, ['rev-parse', 'HEAD'])).trim();
+  assert.match(expected, /^[0-9a-f]{40}$/);
+  const resolved = await resolveBoxBase(root, { boxBase: { repo: 'cluer-helm' } });
+  assert.deepEqual(resolved, { repo: 'cluer-helm', ref: expected });
+});
+
+test('runManifest records the resolved boxBase ref in the run status and passes it to box-mcp.mjs', async t => {
+  const root = await gitFixture(t);
+  const expected = (await git(root, ['rev-parse', 'HEAD'])).trim();
+  let capturedArgs;
+  const spawnImpl = (command, args, options) => {
+    if (command === 'claude') capturedArgs = args;
+    return update(command, args, options);
+  };
+  const state = await runManifest(root, { ...manifest([job({ boxChecks: ['lint'] })], { lint: LINT }), boxBase: { repo: 'cluer-helm' } }, { spawnImpl });
+  assert.equal(state.status, 'complete');
+  assert.deepEqual(state.boxBase, { repo: 'cluer-helm', ref: expected });
+
+  const config = JSON.parse(capturedArgs[capturedArgs.indexOf('--mcp-config') + 1]);
+  const [, , , , , , baseArg] = config.mcpServers.box.args;
+  assert.deepEqual(JSON.parse(baseArg), { repo: 'cluer-helm', ref: expected });
+});
+
+test('runManifest leaves boxBase null without a manifest boxBase', async t => {
+  const root = await gitFixture(t);
+  const state = await runManifest(root, manifest(), { spawnImpl: update });
+  assert.equal(state.boxBase, null);
 });

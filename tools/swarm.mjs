@@ -32,6 +32,7 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
 const CHECK_NAME = /^[A-Za-z0-9 ._-]{1,60}$/;
 const CHECK_TAIL = 2000;
 const DEFAULT_BOX_MAX_CALLS = 30;
+const BOX_BASE_REPO = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 // The stdio MCP server this runner owns; see CONTRACT.md section 4. Never any other server.
 const BOX_MCP_PATH = fileURLToPath(new URL('./box-mcp.mjs', import.meta.url));
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -98,7 +99,7 @@ async function jsonWrite(root, value, data) {
 
 export function validateManifest(manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'boxChecks'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'boxChecks', 'boxBase'].includes(key)) fail(`Unknown manifest field: ${key}`);
   // A shared contract file is coordinator-owned: every job reads it, no job may overwrite it.
   if (manifest.contract !== undefined) {
     if (typeof manifest.contract !== 'string') fail('contract must be a relative file path');
@@ -157,6 +158,17 @@ export function validateManifest(manifest) {
       }
       if (spec.timeoutMs !== undefined && (!Number.isInteger(spec.timeoutMs) || spec.timeoutMs < 1000 || spec.timeoutMs > 1800000)) fail(`Invalid boxCheck timeoutMs: ${name}`);
     }
+  }
+  // boxBase: {repo} names the repo whose git-archive base-layer the swarm-box sandbox stages
+  // before a job's own files are synced on top (CONTRACT.md gap note, base: {repo, ref}). It is
+  // meaningless without any boxChecks anywhere (top-level or per-job), so it is refused as an
+  // unknown field rather than a boxBase-specific error in that case.
+  if (manifest.boxBase !== undefined) {
+    const hasBoxChecksAnywhere = Boolean(manifest.boxChecks) || manifest.jobs.some(job => job?.boxChecks !== undefined);
+    if (!hasBoxChecksAnywhere) fail('Unknown manifest field: boxBase');
+    if (!manifest.boxBase || typeof manifest.boxBase !== 'object' || Array.isArray(manifest.boxBase)) fail('boxBase must be an object');
+    for (const key of Object.keys(manifest.boxBase)) if (key !== 'repo') fail(`Unknown boxBase field: ${key}`);
+    if (typeof manifest.boxBase.repo !== 'string' || !BOX_BASE_REPO.test(manifest.boxBase.repo)) fail(`Invalid boxBase.repo: ${manifest.boxBase.repo}`);
   }
   const ids = new Set();
   const writers = new Set();
@@ -515,17 +527,31 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
   }
 }
 
+// Resolves manifest.boxBase to a full-sha ref at run start, so every box created during the
+// run stages the same base layer the run itself was built against. Only meaningful once
+// validateManifest has already refused boxBase without boxChecks anywhere in the manifest.
+export async function resolveBoxBase(root, manifest) {
+  if (!manifest.boxBase) return null;
+  let ref;
+  try { ref = (await git(root, ['rev-parse', 'HEAD'])).trim(); }
+  catch (error) { fail(`boxBase requires a git repository at the project root: ${error.message}`); }
+  if (!/^[0-9a-f]{40}$/i.test(ref) && !/^[0-9a-f]{64}$/i.test(ref)) fail(`boxBase ref resolution did not return a full sha: ${ref}`);
+  return { repo: manifest.boxBase.repo, ref };
+}
+
 // Writes the job's named subset of manifest.boxChecks into its run dir and returns the argv
 // swarm's own box-mcp.mjs needs (CONTRACT.md section 4): never the manifest's raw endpoint or
 // token, which come only from SWARM_BOX_URL / SWARM_BOX_TOKEN_FILE inside box-mcp.mjs itself.
-async function prepareBoxMcp(root, directory, id, job, manifest, workspaceRoot) {
+async function prepareBoxMcp(root, directory, id, job, manifest, workspaceRoot, boxBase) {
   const checks = Object.fromEntries(job.boxChecks.map(name => [name, manifest.boxChecks[name]]));
   await jsonWrite(root, `${directory}/${job.id}/box-checks.json`, checks);
   const checksFile = path.join(root, directory, job.id, 'box-checks.json');
   const maxCalls = job.boxCheckMaxCalls ?? DEFAULT_BOX_MAX_CALLS;
   // box-mcp.mjs resolves box.jsonl under ./.swarm/runs/<run>/<job>/ relative to its own cwd, so
   // the MCP server must be launched with the project root as cwd, not the job's workspace.
-  return { serverPath: BOX_MCP_PATH, argv: [id, job.id, workspaceRoot, checksFile, String(maxCalls)], cwd: root };
+  // boxBase (when set) is passed as a trailing JSON argv item; box-mcp.mjs includes it verbatim
+  // as `base: {repo, ref}` in POST /v1/boxes, and omits the field entirely without it.
+  return { serverPath: BOX_MCP_PATH, argv: [id, job.id, workspaceRoot, checksFile, String(maxCalls), boxBase ? JSON.stringify(boxBase) : ''], cwd: root };
 }
 
 // Reads a job's box.jsonl (written by box-mcp.mjs, one line per run_check call) for inspect/wait:
@@ -591,6 +617,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     await jsonWrite(root, `${directory}/manifest.json`, manifest);
     await validateProject(root, manifest);
     state.baseCommit = await git(root, ['rev-parse', 'HEAD']).then(value => value.trim(), () => null);
+    state.boxBase = await resolveBoxBase(root, manifest);
     // The shared contract's text travels in every codex prompt instead of a copied file.
     const contractPayload = manifest.contract ? { path: manifest.contract, text: (await bytesAt(root, manifest.contract))?.toString('utf8') ?? '' } : null;
     // Validate/copy every job before spending tokens or starting any workers.
@@ -677,7 +704,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           await write(root, `${directory}/${job.id}/message.txt`, message, true);
           if (job.agent === 'codex') result = await executeCodexJob(root, directory, job, workspaceRoot, { spawnImpl, signal, cancelled, killImpl, env, onOutput: tracker.onOutput, contract: contractPayload });
           else if (job.agent === 'claude') {
-            const boxMcp = job.boxChecks ? await prepareBoxMcp(root, directory, id, job, manifest, workspaceRoot) : null;
+            const boxMcp = job.boxChecks ? await prepareBoxMcp(root, directory, id, job, manifest, workspaceRoot, state.boxBase) : null;
             result = await execute(job, workspaceRoot, message, { spawnImpl, signal, cancelled, killImpl, onOutput: tracker.onOutput, boxMcp });
           }
           else {

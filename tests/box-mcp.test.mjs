@@ -118,11 +118,13 @@ async function setupWorkspace(files) {
   return dir;
 }
 
-async function spawnServer({ runId = 'run1', jobId = 'job1', workspaceDir, checks, maxCalls = 30, env = {} }) {
+async function spawnServer({ runId = 'run1', jobId = 'job1', workspaceDir, checks, maxCalls = 30, base, env = {} }) {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'box-mcp-root-'));
   const checksFile = path.join(cwd, 'checks.json');
   await fs.writeFile(checksFile, JSON.stringify(checks));
-  const child = spawn(process.execPath, [SERVER_PATH, runId, jobId, workspaceDir, checksFile, String(maxCalls)], {
+  const args = [SERVER_PATH, runId, jobId, workspaceDir, checksFile, String(maxCalls)];
+  if (base !== undefined) args.push(JSON.stringify(base));
+  const child = spawn(process.execPath, args, {
     cwd,
     env: { ...process.env, ...env },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -255,6 +257,43 @@ test('budget exhaustion: calls beyond the budget are refused without contacting 
     assert.equal(state.execCalls.length, 1);
   } finally {
     await stopChild(child);
+    server.close();
+  }
+});
+
+test('base: the box create body includes base when configured, and omits it when not', async () => {
+  const workspaceDir = await setupWorkspace({ 'a.txt': 'hello' });
+  const { server, state } = startFakeBox();
+  const port = await listen(server);
+  const env = { SWARM_BOX_URL: `http://127.0.0.1:${port}`, SWARM_BOX_TOKEN_FILE: await writeToken() };
+
+  const { child: withBase, client: withBaseClient } = await spawnServer({
+    runId: 'runbase', jobId: 'jobbase',
+    workspaceDir,
+    checks: { lint: { argv: ['npm', 'test'] } },
+    base: { repo: 'cluer-helm', ref: 'a'.repeat(40) },
+    env,
+  });
+  try {
+    const result = await withBaseClient.call('tools/call', { name: 'run_check', arguments: { name: 'lint' } });
+    assert.equal(result.result.isError, false);
+    assert.deepEqual(state.boxCreates[0].base, { repo: 'cluer-helm', ref: 'a'.repeat(40) });
+  } finally {
+    await stopChild(withBase);
+  }
+
+  const { child: withoutBase, client: withoutBaseClient } = await spawnServer({
+    runId: 'runnobase', jobId: 'jobnobase',
+    workspaceDir,
+    checks: { lint: { argv: ['npm', 'test'] } },
+    env,
+  });
+  try {
+    const result = await withoutBaseClient.call('tools/call', { name: 'run_check', arguments: { name: 'lint' } });
+    assert.equal(result.result.isError, false);
+    assert.equal('base' in state.boxCreates[1], false);
+  } finally {
+    await stopChild(withoutBase);
     server.close();
   }
 });

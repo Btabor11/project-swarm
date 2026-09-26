@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add box checks: Claude workers can call `run_check(name)` to validate code in a sandboxed OpenShell environment; manifest defines named checks with argv, working directory, and timeout; configuration via `SWARM_BOX_URL` and `SWARM_BOX_TOKEN_FILE` environment variables, never in manifests.
+- Add optional top-level manifest field `boxBase: {repo}` so a box's sandbox can stage a `git archive` base layer of a repo the Helm worker knows, with the worker's own files synced on top; the runner resolves the ref at run start to the project root's full `git rev-parse HEAD` sha and records `{repo, ref}` in the run status. Refused as an unknown field unless the manifest declares `boxChecks` somewhere; `box-mcp.mjs` includes `base: {repo, ref}` in `POST /v1/boxes` only when configured, leaving the body unchanged otherwise.
 
 ## 1.15.0
 

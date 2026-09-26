@@ -147,7 +147,7 @@ async function ensureBox(state, origin, token) {
   const res = await boxFetch(`${origin}/v1/boxes`, token, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ runId: state.runId, jobId: state.jobId, checks: state.checks }),
+    body: JSON.stringify({ runId: state.runId, jobId: state.jobId, checks: state.checks, ...(state.base ? { base: state.base } : {}) }),
   }, REQUEST_TIMEOUT_MS);
   const data = await res.json();
   if (typeof data?.boxId !== 'string' || !data.boxId) fail('Box create response missing boxId');
@@ -244,8 +244,19 @@ async function handleRequest(state, request) {
   return { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown method: ${method}` } };
 }
 
+function parseBase(baseArg) {
+  if (baseArg === undefined || baseArg === '') return null;
+  let base;
+  try { base = JSON.parse(baseArg); } catch { fail(`Invalid base argument: ${baseArg}`); }
+  if (!base || typeof base !== 'object' || Array.isArray(base)) fail(`Invalid base argument: ${baseArg}`);
+  for (const key of Object.keys(base)) if (!['repo', 'ref'].includes(key)) fail(`Unknown base field: ${key}`);
+  if (typeof base.repo !== 'string' || !base.repo) fail(`Invalid base.repo: ${base.repo}`);
+  if (typeof base.ref !== 'string' || !base.ref) fail(`Invalid base.ref: ${base.ref}`);
+  return { repo: base.repo, ref: base.ref };
+}
+
 async function main() {
-  const [runId, jobId, workspaceDirArg, checksFileArg, maxCallsArg] = process.argv.slice(2);
+  const [runId, jobId, workspaceDirArg, checksFileArg, maxCallsArg, baseArg] = process.argv.slice(2);
   if (!ID.test(runId ?? '')) fail(`Invalid run id: ${runId}`);
   if (!ID.test(jobId ?? '')) fail(`Invalid job id: ${jobId}`);
   if (!workspaceDirArg) fail('Missing workspace dir argument');
@@ -255,10 +266,11 @@ async function main() {
   const checks = validateChecks(JSON.parse(await fs.readFile(path.resolve(checksFileArg), 'utf8')));
   const maxCalls = maxCallsArg === undefined ? DEFAULT_MAX_CALLS : Number(maxCallsArg);
   if (!Number.isInteger(maxCalls) || maxCalls < 1 || maxCalls > 100000) fail(`Invalid call budget: ${maxCallsArg}`);
+  const base = parseBase(baseArg);
 
   const state = {
     runId, jobId, workspaceDir, checks, maxCalls, calls: 0,
-    boxId: null, origin: null, token: null,
+    boxId: null, origin: null, token: null, base,
     jsonlPath: path.resolve(process.cwd(), '.swarm', 'runs', runId, jobId, 'box.jsonl'),
   };
 
