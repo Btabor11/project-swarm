@@ -40,6 +40,35 @@ Auth, async and similar topics are not triggers by themselves. A design choice t
 
 The runner has no retry/re-dispatch path today — every job in a manifest runs exactly once. The escalate-after-two-failures rule is therefore a coordinator rule, not something the runner enforces: after a `mid` job's second failed attempt, the coordinator writes a fresh job with `tier: "expensive"` and a `tierReason` explaining the two failures, rather than dispatching a third `mid` attempt at the same task.
 
+## Wiring jobs
+
+A job that wires new code to an existing data path — reusing a fetch, event,
+or call that already exists elsewhere in the project — needs that path
+scouted before dispatch: identify who mounts or calls whom, and put every
+file on that path in the job's declared `outputs`. Without that, a worker
+told to "reuse the existing fetch" may find the component on that path
+outside its outputs and quietly add a new request instead, mentioning it only
+in a side field; the coordinator then discovers it only when unrelated tests
+break. A worker that cannot meet a MUST or "do not" rule inside its own
+outputs must stop and return status `blocked` naming the file it needs,
+never work around the rule. Enforcement: this is stated directly in every
+CLI worker's preamble, and `inspect --results` warns `outside outputs: <job>:
+<path>` when a job's own `crossJobNames` or `notes` name a real repo path
+outside its outputs. See
+[manifest reference](manifest-reference.md#result-file).
+
+## Sandboxed checker jobs
+
+Name a `codex` job's required test environment explicitly with the job field
+`testEnv` instead of letting a sandboxed, detached worktree rediscover it
+under a permission denial. A capable worker may spend real time and tokens
+finding a missing environment variable itself before it can report a genuine
+result; a weaker one could just report that setup failure as a red suite.
+`doctor codex`'s `sandbox probe` check surfaces the same kind of sandbox
+denial ahead of any job, and `testEnv` values are also named for the worker
+directly in its prompt. See
+[manifest reference](manifest-reference.md#job-fields).
+
 ## Decompose before adding workers
 
 A job that changes token refresh, persistence, revocation, runner behavior, scheduled work, archival, status, and their tests contains several concerns. First identify the stable interfaces and ownership boundaries. For example, settle a canonical account-access contract, then dispatch disjoint runtime callers and status presentation in parallel against that contract. Keep edits to a shared storage file with one writer; making several workers touch that file would create a merge bottleneck. Each job should state the behavior to deliver, files it owns, the acceptance check the coordinator will execute, and what must be true of its inputs.
@@ -48,7 +77,7 @@ When independent jobs must still agree on names neither can see the other choose
 
 Use small cohorts whose outputs can sensibly integrate together. An unrelated documentation task need not hold a ready code change behind the all-jobs-complete gate. Multiple independent runs can overlap, but the coordinator must ensure their output ownership does not overlap and account for total provider concurrency across runs. Preflight checks one manifest; it does not reserve files or detect other active runs. Review completed proposals while slower workers finish; do not bypass whole-run integration by copying files out manually.
 
-Bind runnable acceptance evidence before dispatch. Name the existing check command and the behavior it covers, or assign a focused test file and its execution command. Implementation and its test may have the same owner; an independent test writer can work after the relevant API stabilizes. If the repository has one shared test file, use a serialized ownership handoff or first approve separate files supported by its test runner. Do not postpone all regression writing until one final broad testing job. The coordinator executes the cohort's checks after whole-run integration; worker-authored assertions and a proposed command do not count as passed tests. An integrated stage with missing or failing checks remains unverified, and dependent work must not assume its correctness.
+Bind runnable acceptance evidence before dispatch. Name the existing check command and the behavior it covers, or assign a focused test file and its execution command. A job that writes a JSON report should declare it with the job field `resultFile` (in its own `outputs`) so `inspect --results` reads that file directly instead of depending on the worker's last message being valid JSON; see [manifest reference](manifest-reference.md#result-file). Implementation and its test may have the same owner; an independent test writer can work after the relevant API stabilizes. If the repository has one shared test file, use a serialized ownership handoff or first approve separate files supported by its test runner. Do not postpone all regression writing until one final broad testing job. The coordinator executes the cohort's checks after whole-run integration; worker-authored assertions and a proposed command do not count as passed tests. An integrated stage with missing or failing checks remains unverified, and dependent work must not assume its correctness.
 
 Increase concurrency when more independent, useful work is ready and account capacity permits it. If workers are waiting on one unsettled contract, settle the contract rather than assigning more consumers to stale snapshots. A manager may help draft boundaries or review an area when that removes coordinator load. Restricted CLI managers have no agent or shell tools and cannot dispatch a nested swarm; the coordinator validates and starts their proposed manifests. An authorized native host manager can delegate bounded work when supported by the host, with those workers counted in the ownership and capacity ledger. This does not change the restricted runner's capabilities or grant new authorization.
 

@@ -27,6 +27,8 @@ function makeExec(script) {
   const calls = [];
   let index = 0;
   const exec = async (file, args, opts) => {
+    if (file === 'git' && args[0] === 'remote') return ok('https://github.com/acme/widgets.git');
+    if (file === 'git' && args[0] === 'merge-base') return fail('no package');
     calls.push({ file, args, opts });
     if (index >= script.length) throw new Error(`Unexpected exec call #${index + 1}: ${file} ${args.join(' ')}`);
     const entry = script[index++];

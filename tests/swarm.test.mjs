@@ -531,7 +531,7 @@ test('parseShipFlags maps every flag to ship() options and rejects an unknown fl
     { repo: 'acme/widgets', payloadPath: 'pr.json', requireSections: ['Summary', 'Tests'], merge: false, mergeMethod: 'rebase', timeoutMs: 30000, pollMs: 5000 },
   );
   assert.throws(() => parseShipFlags(['--bogus']), /Unknown flag: --bogus/);
-  assert.throws(() => parseShipFlags(['--pr', 'pr.json']), /requires --repo/);
+  assert.equal(parseShipFlags(['--pr', 'pr.json']).repo, undefined);
   assert.throws(() => parseShipFlags(['--repo', 'acme/widgets']), /requires --pr/);
   assert.throws(() => parseShipFlags(['--repo', 'acme/widgets', '--pr', 'pr.json', '--timeout', '0']), /--timeout requires a positive number/);
   assert.throws(() => parseShipFlags(['--repo', 'acme/widgets', '--pr', 'pr.json', '--poll', 'soon']), /--poll requires a positive number/);
@@ -572,11 +572,11 @@ test('CLI ship rejects an unknown flag before reading any run state, exit 1', as
   });
 });
 
-test('CLI ship requires --repo and --pr', async t => {
+test('CLI ship requires --pr', async t => {
   const root = await fixture(t);
-  await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'ship', 'no-such-run', '--pr', 'pr.json']), error => {
+  await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'ship', 'no-such-run']), error => {
     assert.equal(error.code, 1);
-    assert.match(JSON.parse(error.stderr).error, /requires --repo/);
+    assert.match(JSON.parse(error.stderr).error, /requires --pr/);
     return true;
   });
 });
@@ -675,7 +675,7 @@ test('inspect --results prints only the contract shape', async t => {
   assert.equal(report.status, 'complete');
   assert.deepEqual(report.warnings, []);
   assert.equal(report.jobs.length, 1);
-  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status', 'tokens'].sort());
+  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'resultSource', 'status', 'tokens'].sort());
   assert.equal(report.jobs[0].id, 'writer');
   assert.equal(report.jobs[0].costUsd, 0.1);
   assert.deepEqual(report.jobs[0].result, { files_changed: ['input.txt'], notes: ['done'] });
@@ -701,8 +701,8 @@ test('parseGoFlags maps every flag to go() options and needs --repo and --pr tog
     { commitMessage: 'msg', repo: 'acme/widgets', payloadPath: 'pr.json', requireSections: ['Mutation check'], mergeMethod: 'rebase', timeoutMs: 30000, mutants: true },
   );
   assert.deepEqual(parseGoFlags([]), { commitMessage: undefined, repo: undefined, payloadPath: undefined, requireSections: [], mergeMethod: undefined, timeoutMs: undefined, mutants: false });
-  assert.throws(() => parseGoFlags(['--repo', 'acme/widgets']), /both --repo and --pr/);
-  assert.throws(() => parseGoFlags(['--pr', 'pr.json']), /both --repo and --pr/);
+  assert.throws(() => parseGoFlags(['--repo', 'acme/widgets']), /requires --pr with --repo/);
+  assert.equal(parseGoFlags(['--pr', 'pr.json']).payloadPath, 'pr.json');
   assert.throws(() => parseGoFlags(['--bogus']), /Unknown flag: --bogus/);
   assert.throws(() => parseGoFlags(['--timeout', '0']), /--timeout requires a positive number/);
 });
