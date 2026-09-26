@@ -46,3 +46,88 @@ rule is enforced or documented.
    work is unrelated, whichever comes first. Documentation:
    [kickoff](kickoff.md#handoff) and
    [orchestration](orchestration.md#fresh-context-per-topic).
+10. **Mutation tooling existed but nothing pointed to it.** The orchestrator
+    hand-wrote mutant scripts for weeks because the existing `mutants`
+    manifest field and `integrate --mutants` never surfaced at the moment of
+    need. Rule: surface existing tooling at the point of need instead of
+    re-inventing it. Enforcement: `ship ... --require-section` warns
+    `no manifest mutants: declare "mutants" in the manifest and run
+    "integrate --mutants" (see docs/verification.md)` when the run's manifest
+    declares no `mutants`; the skill's ship checklist repeats the same line.
+    Documentation: [manifest reference](manifest-reference.md#mutation-checks)
+    and [verification](verification.md).
+11. **A bare HTTP 307 hid a renamed repository.** `ship` failed at PR
+    creation with only an opaque redirect code; the git remote already
+    pointed at the repository's new name. Rule: derive the repo from the git
+    remote instead of trusting a stale flag, and explain a redirect as a
+    possible rename. Enforcement: `ship` derives `--repo` from
+    `git remote get-url origin` when it is omitted, warns when a given
+    `--repo` differs from origin, and appends `(repo moved? origin is
+    OWNER/NAME)` to any GitHub CLI error containing `HTTP 301`, `302`, `307`,
+    or `308`. Documentation: [manifest reference](manifest-reference.md#ship).
+12. **`update` reported up to date on the old version.** It ran seconds
+    before the release-tag workflow finished publishing the new tag. Rule:
+    distinguish "no newer tag yet" from "the tag is still on its way."
+    Enforcement: `update` returns `tagPending: true` and message `tag pending
+    for <version>; retry in a minute` when origin's package.json version is
+    already newer than the newest `v*` tag; `ship` itself polls for the new
+    tag after merging a version-bump PR and reports `tag: {name, status,
+    waitedSeconds}`. Documentation:
+    [manifest reference](manifest-reference.md#ship).
+13. **A wiring job added an undisclosed request.** Told to reuse an existing
+    data fetch, the worker found the component on the data path outside its
+    declared outputs, quietly added a new request instead, and mentioned it
+    only in a side field; two existing tests broke and a follow-up job was
+    needed (cost: $1.18 plus the follow-up). Rule: scout the data path — who
+    mounts or calls whom — before a wiring job, and put every file on that
+    path in its outputs; a worker that cannot meet a rule inside its outputs
+    must return `blocked`, never work around it. Enforcement: the worker
+    preamble states the blocked-not-worked-around rule; `inspect --results`
+    warns `outside outputs: <job>: <path>` when a job's `crossJobNames` or
+    `notes` name a real repo path outside its own outputs. Documentation:
+    [orchestration](orchestration.md#wiring-jobs).
+14. **The first real `redcheck` run misfired twice.** A test command passed
+    as one quoted string failed with an empty error, and on a follow-up job
+    the run's base commit already contained the feature, so the check
+    reported green even though the old code on the default branch actually
+    failed most of the new tests. Rule: pass the test command as separate
+    argv tokens, and check the run's base against the default branch before
+    trusting a green result. Enforcement: a spawn failure now returns a hint
+    to pass separate argv tokens; `redcheck --base <ref>` restores from an
+    explicit ref, and an omitted `--base` gets a `suggestBase` field and a
+    warning when the run base is not an ancestor of the default branch tip.
+    Documentation: [manifest reference](manifest-reference.md#redcheck).
+15. **A sandboxed checker found its own missing environment variable.** A
+    worker running in a detached, sandboxed worktree saw its test runner
+    fail with `EPERM` on `package.json` and had to find the right
+    environment variable itself before it could report a real result; a
+    weaker worker could easily have reported that setup failure as a red
+    suite (13 minutes, 262k tokens spent working around it). Rule: name the
+    required test environment explicitly instead of relying on a worker to
+    rediscover it. Enforcement: manifest job field `testEnv` (codex jobs
+    only) sets the child process environment and tells the worker what is
+    already set; `doctor codex` adds a `sandbox probe` check that surfaces
+    the same kind of sandbox denial up front. Documentation:
+    [orchestration](orchestration.md#sandboxed-checker-jobs).
+16. **A pre-existing flake looked like a regression.** A wait equal to the
+    test timeout (see entry 4) stopped `ship` on a repeated check; telling a
+    flake already present on the base commit apart from an actual regression
+    took 20 hand-run loops of the suite, twice. Rule: automatically compare a
+    failing repeated check against the run's base commit before asking a
+    human to hand-run anything. Enforcement: a failing check with `repeat`
+    reruns the named test file against a temporary checkout of the run's
+    base commit and reports `flakeOnBase: {file, failed, runs}` plus a
+    `flake on base: k/N (<file>)` line; entry 4's rule (keep waits below the
+    test timeout) still stands. Documentation:
+    [verification](verification.md#flake-on-base).
+17. **A correct report got lost behind a one-line summary.** A worker wrote
+    a valid JSON report file but ended its turn with a short prose summary
+    instead of that JSON as its final message, so `inspect --results` showed
+    nulls and the orchestrator had to open the file by hand. Rule: let a job
+    declare its own report file so review does not depend on the worker's
+    last line matching it. Enforcement: job field `resultFile` (must be one
+    of that job's `outputs`, with optional `resultSchema` listing required
+    keys); `inspect --results` reads and parses that file directly, warning
+    on missing/invalid JSON, missing keys, or a mismatch with the worker's
+    own final message, and reports `resultSource: 'file'|'message'`.
+    Documentation: [verification](verification.md#resultfile).

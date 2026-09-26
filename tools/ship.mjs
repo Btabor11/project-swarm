@@ -21,13 +21,33 @@ function firstStderrLine(stderr) {
   return line.slice(0, 200);
 }
 
-function stepFailed(step, res) {
-  return `${step} failed: ${firstStderrLine(res.stderr)}`;
+function stepFailed(step, res, originRepo) {
+  const output = `${res.stderr ?? ''}\n${res.stdout ?? ''}`;
+  return `${step} failed: ${firstStderrLine(res.stderr || res.stdout)}` +
+    (originRepo && /HTTP 30[1278]\b/.test(output) ? ` (repo moved? origin is ${originRepo})` : '');
+}
+
+function githubRepo(url) {
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)\/?$/.exec(url);
+  const repo = match?.[1].replace(/\.git$/, '');
+  return repo && REPO_RE.test(repo) ? repo : null;
+}
+
+async function releaseVersion(exec, root, branch) {
+  const ancestor = await exec('git', ['merge-base', `origin/${branch}`, 'HEAD'], { cwd: root });
+  if (ancestor.code !== 0 || !ancestor.stdout.trim()) return null;
+  const before = await exec('git', ['show', `${ancestor.stdout.trim()}:package.json`], { cwd: root });
+  const after = await exec('git', ['show', 'HEAD:package.json'], { cwd: root });
+  try {
+    const version = JSON.parse(after.stdout).version;
+    const oldVersion = before.code === 0 ? JSON.parse(before.stdout).version : null;
+    return after.code === 0 && typeof version === 'string' && /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) && version !== oldVersion ? version : null;
+  } catch { return null; }
 }
 
 function getMarkerForSection(body, sectionName) {
   const lines = String(body ?? '').split('\n');
-  const at = lines.findIndex(line => line === `## ${sectionName}`);
+  const at = lines.findIndex(line => line.toLowerCase() === `## ${sectionName}`.toLowerCase());
   if (at === -1) return null;
   const nextHeading = lines.slice(at + 1).findIndex(line => line.startsWith('## '));
   const end = nextHeading === -1 ? lines.length : at + 1 + nextHeading;
@@ -72,7 +92,7 @@ export function missingSections(body, names) {
   });
   const missing = [];
   for (const name of names) {
-    const at = headings.findIndex(heading => heading.title === name);
+    const at = headings.findIndex(heading => heading.title.toLowerCase() === name.toLowerCase());
     if (at === -1) { missing.push(name); continue; }
     const end = at + 1 < headings.length ? headings[at + 1].index : lines.length;
     const content = lines.slice(headings[at].index + 1, end).join('\n');
@@ -88,6 +108,7 @@ export function renderChecks(results) {
   for (const result of results) {
     let line = `${result.name} -> ${result.status}`;
     if (result.status === 'failed' && result.exitCode != null) line += ` (exit ${result.exitCode})`;
+    if (result.flakeOnBase) line += ` — flake on base: ${result.flakeOnBase.failed}/${result.flakeOnBase.runs} (${result.flakeOnBase.file})`;
     lines.push(line);
     if (result.status === 'failed' && result.tail) lines.push(...String(result.tail).split('\n').slice(-20));
   }
@@ -122,17 +143,19 @@ export function summarizeRollup(rollup) {
 
 export async function ship(options) {
   const {
-    root, repo, payloadPath,
+    root, payloadPath,
     requireSections = [],
     merge = true,
     mergeMethod = SHIP_DEFAULTS.mergeMethod,
     pollMs = SHIP_DEFAULTS.pollMs,
     timeoutMs = SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs = SHIP_DEFAULTS.noCiGraceMs,
+    tagTimeoutMs = 180_000, manifest,
     runChecks, exec, sleep, now = () => Date.now(),
   } = options;
 
-  const base = { status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null };
+  let repo = options.repo;
+  const base = { warnings: [], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null };
 
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
@@ -145,9 +168,21 @@ export async function ship(options) {
   } catch (err) {
     return { ...base, status: 'refused', reason: err.message };
   }
-  if (!REPO_RE.test(repo)) return { ...base, status: 'refused', reason: 'invalid repo' };
+  if (repo !== undefined && !REPO_RE.test(repo)) return { ...base, status: 'refused', reason: 'invalid repo' };
   if (!HEAD_RE.test(payload.head) || payload.head.startsWith('-')) return { ...base, status: 'refused', reason: 'invalid head' };
 
+  if (!Number.isFinite(tagTimeoutMs) || tagTimeoutMs < 0) return { ...base, status: 'refused', reason: 'invalid tagTimeoutMs' };
+  const origin = await exec('git', ['remote', 'get-url', 'origin'], { cwd: root });
+  const originUrl = origin.stdout.trim();
+  const originRepo = githubRepo(originUrl);
+  if (!repo) {
+    if (!originRepo) return { ...base, status: 'refused', reason: `cannot derive --repo from origin ${originUrl}; pass --repo OWNER/NAME` };
+    repo = originRepo;
+    base.repo = repo;
+  } else if (originRepo && repo !== originRepo) base.warnings.push(`--repo ${repo} differs from origin ${originRepo}`);
+  if (manifest && requireSections.some(name => name.toLowerCase() === 'mutation check') && !manifest.mutants?.length && !manifest.jobs?.some(job => job.mutants?.length)) {
+    base.warnings.push('no manifest mutants: declare "mutants" in the manifest and run "integrate --mutants" (see docs/verification.md)');
+  }
   const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
   if (statusRes.code !== 0) return { ...base, status: 'refused', reason: 'git status failed' };
   if (statusRes.stdout.trim() !== '') return { ...base, status: 'refused', reason: 'commit first' };
@@ -176,32 +211,32 @@ export async function ship(options) {
   const [owner] = repo.split('/');
   const listRes = await exec('gh', ['api', `repos/${repo}/pulls?head=${owner}:${payload.head}&state=open`], { cwd: root });
   let existing;
-  if (listRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('pr list', listRes) };
+  if (listRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('pr list', listRes, originRepo) };
   try {
     existing = JSON.parse(listRes.stdout || '[]');
   } catch {
-    return { ...base, status: 'refused', reason: stepFailed('pr list', listRes) };
+    return { ...base, status: 'refused', reason: stepFailed('pr list', listRes, originRepo) };
   }
   let pr;
   if (existing.length > 0) {
     const patchRes = await exec('gh', ['api', '-X', 'PATCH', `repos/${repo}/pulls/${existing[0].number}`, '--input', '-'], {
       cwd: root, input: JSON.stringify({ title: payload.title, body }),
     });
-    if (patchRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('pr update', patchRes) };
+    if (patchRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('pr update', patchRes, originRepo) };
     try {
       pr = JSON.parse(patchRes.stdout);
     } catch {
-      return { ...base, status: 'refused', reason: stepFailed('pr update', patchRes) };
+      return { ...base, status: 'refused', reason: stepFailed('pr update', patchRes, originRepo) };
     }
   } else {
     const createRes = await exec('gh', ['api', `repos/${repo}/pulls`, '--input', '-'], {
       cwd: root, input: JSON.stringify({ title: payload.title, head: payload.head, base: payload.base, body }),
     });
-    if (createRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('pr create', createRes) };
+    if (createRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('pr create', createRes, originRepo) };
     try {
       pr = JSON.parse(createRes.stdout);
     } catch {
-      return { ...base, status: 'refused', reason: stepFailed('pr create', createRes) };
+      return { ...base, status: 'refused', reason: stepFailed('pr create', createRes, originRepo) };
     }
   }
   base.pr = pr.number;
@@ -211,6 +246,7 @@ export async function ship(options) {
   let ci = null;
   for (;;) {
     const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
+    if (viewRes.code !== 0 && /HTTP 30[1278]\b/.test(`${viewRes.stderr} ${viewRes.stdout}`)) return { ...base, status: 'refused', reason: stepFailed('pr view', viewRes, originRepo) };
     let view = null;
     if (viewRes.code === 0) {
       try {
@@ -237,8 +273,10 @@ export async function ship(options) {
   if (isHeld(body)) return { ...base, status: 'held', reason: 'PR body requests manual review' };
   if (merge === false) return { ...base, status: 'ready' };
 
+  const version = await releaseVersion(exec, root, payload.base);
+  if (version) base.tag.name = `v${version}`;
   const mergeRes = await exec('gh', ['pr', 'merge', String(pr.number), '--repo', repo, `--${mergeMethod}`, '--match-head-commit', sha], { cwd: root });
-  if (mergeRes.code !== 0) return { ...base, status: 'merge-failed', reason: firstStderrLine(mergeRes.stderr) };
+  if (mergeRes.code !== 0) return { ...base, status: 'merge-failed', reason: stepFailed('merge', mergeRes, originRepo).replace(/^merge failed: /, '') };
   const mergedRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,mergeCommit'], { cwd: root });
   let merged = null;
   if (mergedRes.code === 0) {
@@ -248,7 +286,24 @@ export async function ship(options) {
       merged = null;
     }
   }
-  if (!merged) return { ...base, status: 'merge-failed', reason: stepFailed('post-merge view', mergedRes) };
-  if (merged.state === 'MERGED') return { ...base, status: 'merged', mergeSha: merged.mergeCommit?.oid ?? null };
+  if (!merged) return { ...base, status: 'merge-failed', reason: stepFailed('post-merge view', mergedRes, originRepo) };
+  if (merged.state === 'MERGED') {
+    if (version && tagTimeoutMs > 0) {
+      const start = now();
+      let waitedMs = 0;
+      for (;;) {
+        const tag = await exec('git', ['ls-remote', '--tags', 'origin', `v${version}`], { cwd: root });
+        waitedMs = Math.max(waitedMs, now() - start);
+        if (tag.code === 0 && tag.stdout.trim()) { base.tag.status = 'found'; break; }
+        if (waitedMs >= tagTimeoutMs) { base.tag.status = 'missing'; break; }
+        const pause = Math.min(10_000, tagTimeoutMs - waitedMs);
+        await sleep(pause);
+        waitedMs = Math.max(waitedMs + pause, now() - start);
+      }
+      base.tag.waitedSeconds = waitedMs / 1000;
+      if (base.tag.status === 'missing') base.warnings.push(`release tag v${version} not on origin after ${base.tag.waitedSeconds}s`);
+    }
+    return { ...base, status: 'merged', mergeSha: merged.mergeCommit?.oid ?? null };
+  }
   return { ...base, status: 'merge-failed', reason: 'PR not merged' };
 }

@@ -62,7 +62,7 @@ export async function go(root, target, flags, deps) {
 
   let integrated;
   try {
-    integrated = await integrate(root, base.runId, { mutants: Boolean(flags.mutants) });
+    integrated = await integrate(root, base.runId, { mutants: Boolean(flags.mutants), ...(flags.noFlakeCheck ? { noFlakeCheck: true } : {}) });
   } catch (error) {
     return { status: 'failed', stage: 'integrate', ...base, reason: error.message };
   }
@@ -87,12 +87,14 @@ export async function go(root, target, flags, deps) {
     status = 'committed'; stage = 'commit';
   }
 
-  if (flags.repo && flags.payloadPath) {
+  if (flags.payloadPath) {
     let shipped;
     try {
       shipped = await ship(root, base.runId, {
         repo: flags.repo, payloadPath: flags.payloadPath, requireSections: flags.requireSections ?? [],
         mergeMethod: flags.mergeMethod, timeoutMs: flags.timeoutMs,
+        ...(flags.tagTimeoutMs !== undefined ? { tagTimeoutMs: flags.tagTimeoutMs } : {}),
+        ...(flags.noFlakeCheck ? { noFlakeCheck: true } : {}),
       });
     } catch (error) { return { status: 'failed', stage: 'ship', ...base, reason: error.message }; }
     base.ship = shipped; stage = 'ship';

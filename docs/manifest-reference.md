@@ -50,6 +50,8 @@ Unknown top-level fields are rejected.
 - `ignoreTests`: optional array of at most 100 explicit existing relative file paths, same path rules as `context`. Lists test files the job knowingly leaves uncovered by `context` — see "Context check" below. Give a reason in the `prompt` when you use it.
 - `after`: optional non-empty array of other job ids in the same manifest that must all reach `complete` before this job starts. See [After](#after) below.
 - `web`: optional, must be `true` when present. Adds `WebSearch`/`WebFetch` to the claude worker's `--tools` and passes `--allowedTools WebSearch,WebFetch` (without the latter the restricted CLI asks for approval and, with no prompt surface, refuses). Refused when `agent` is not `"claude"` (`web is only supported for the claude agent`) or when `outputs` is non-empty (`a web job must be read-only (no outputs)`) — a web job never gets `Write`, `Edit`, `Bash`, or any other tool. See [Scout](#scout) below.
+- `testEnv`: optional, `codex` jobs only — an object of string→string set in the codex process environment, with a matching prompt line `Test environment (already set): K=V, ...` so the worker never has to rediscover a sandboxed test's required variables. Refused on any other agent (`Job <id>: testEnv is only supported for codex jobs`). Keys must match `^[A-Z][A-Z0-9_]*$`; a key containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, or `CREDENTIAL` is refused (`Job <id>: testEnv key <k> looks like a secret`). Values are capped at 200 characters and may not contain newlines. See "Sandbox probe" under [doctor](#kickoff-diagnostics-and-install-commands) below.
+- `resultFile`: optional repo-relative path that must also be one of the job's own `outputs` (`Job <id>: resultFile must be one of its outputs`). Optional `resultSchema`: a list of required top-level keys. See "Result file" under `inspect` below.
 
 **Precedence:** an explicit per-job `model` always wins. `tier` is descriptive, coordinator-facing routing guidance for choosing which provider/model to put in `model` (or which worker pool to dispatch to); the runner itself does not map `tier` to a model. A job may set both: `model` decides what actually runs, `tier`/`tierReason` document why that choice was made. A manifest with no `tier` field behaves exactly as before.
 
@@ -114,6 +116,12 @@ Use `--root /path/to/project` to select a project explicitly. Otherwise the runn
 `validate` checks the assignment, paths, file size limits, and (see "Context check" below) that every existing declared output is not left uncovered by a test that already references it, without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out; a declared `context` file that git does not track at all (untracked or ignored, not merely edited) is instead refused outright — `Job <id>: codex context file <path> is not tracked by git (codex sees HEAD only)` — since Codex would silently see nothing there; the manifest's `contract` path is exempt from this refusal, since its text now travels in the codex prompt directly (see below). `run` performs the same validation before dispatching any worker. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
 
 `inspect` additionally reports, per job, `result` — the worker's own final JSON-object line from its saved response (whatever keys it wrote, or `null` if no line parses as a JSON object) — and `costUsd` (a number when the provider reported one, else `null`). A `result.notes` array, if present, is capped at 20 entries of at most 500 characters each in the printed report; this is display data from the worker, never executed or trusted.
+
+### Result file
+
+For a job that declares `resultFile`, `inspect --results` sets `result` to the parsed JSON of that file (read from the job's proposed output) instead of the worker's final message line, and adds `resultSource: 'file'|'message'` so a reviewer can tell which one answered. A missing or invalid file adds warning `resultFile unreadable: <job>: <reason>`; missing required `resultSchema` keys add `resultFile missing keys: <job>: k1,k2`; when the worker's own final JSON also parses and shares a key with a different value, `resultFile disagrees with final message: <job>: <key>` is added too. See [verification](verification.md#resultfile).
+
+`inspect --results` also warns when a job's own `crossJobNames` or `notes` string names a repo-relative path (a token with a `/` or a file extension) that exists in the repo but is not one of that job's declared `outputs`: `outside outputs: <job>: <path>` — a worker mentioning a file it silently touched outside its ownership, instead of stopping and returning `blocked`. See [orchestration](orchestration.md#wiring-jobs).
 
 `wait`, `inspect`, and `inspect --results` job entries also carry `tokens` (`usage.total_tokens` when the provider reported it, else `null`). At the run level, `tokens` is the sum of every job's non-null `tokens` (or `null` when none are known), and `costNotReported` lists the ids of jobs whose `costUsd` is `null` (`[]` when every job reported a cost); the run's `costUsd` stays the sum of the costs that were reported.
 
@@ -232,6 +240,7 @@ The `monitor` command is a single read-only snapshot, suitable for periodic coor
 - `argv`: required non-empty array of strings. `argv[0]` is the program; no shell is ever used, so shell metacharacters in any item are passed through literally, never interpreted.
 - `timeoutMs`: optional integer 1,000–1,800,000; default 300,000.
 - `repeat`: optional integer 1–20, default 1. See [Repeat](#repeat) below.
+- `flakeRuns`: optional integer 1–20, overriding `repeat` as the number of base-commit reruns used to measure a pre-existing flake. See [Flake on base](#flake-on-base) below.
 
 Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrated}` expands to the run's integrated file paths (relative to the project root) as separate argv items; `{integrated:.py}` (or any other extension) expands to only the integrated files with that extension. If a placeholder expands to zero files, that check is skipped (`status: "skipped"`) rather than run with nothing to act on.
 
@@ -243,12 +252,17 @@ Checks run with `cwd` at the project root, the coordinator's inherited environme
 
 ```sh
 node tools/swarm.mjs redcheck <run-id> --test <argv...>
+node tools/swarm.mjs redcheck <run-id> --base <ref> --test <argv...>
 ```
 
 The exported function is `redcheckRun(root, runId, argv, options)`; tests may
 inject `spawnImpl` and `timeoutMs` (default 300000). The CLI runs argv directly
 without a shell in the selected root. Everything after `--test`, including
 flags such as `--root`, belongs to the test command.
+
+`--base <ref>` restores non-test outputs to `git show <ref>:<path>` content instead of the run's own recorded base (a path missing at `<ref>` is deleted for the test, then restored); default behavior is unchanged. When `--base` is omitted and the run's base commit is not an ancestor of the default branch tip (checked with `git merge-base --is-ancestor` against `origin/HEAD`), the result gains `suggestBase: 'origin/main'` (the actual default-branch ref name) and a warning `run base is not on the default branch; old code may already contain the change — try --base origin/main` — the case that produced a false green on a follow-up job whose base already contained the feature. The result JSON always carries `base: <ref or 'run-base'>`.
+
+If the test command cannot be spawned (`ENOENT`, or a single `--test` token containing a space that fails to launch), the result is `{status:'error', exitCode:null, hint:'could not start <cmd>: pass the test command as separate argv tokens'}` instead of a bare launch failure.
 
 For a complete or integrated run, redcheck temporarily restores **every
 non-test declared output** to its base content. Test paths are under `tests/`
@@ -295,6 +309,10 @@ The result (and the saved run state, visible from `inspect <run-id>`) gains:
 
 `status` is one of `passed`, `failed` (non-zero exit), `timeout`, `error` (the program could not be launched), or `skipped`. `tail` is the last 2000 bytes of that check's combined stdout+stderr, never more. `checksPassed` is `true` only when no check failed, timed out, or errored.
 
+## Flake on base
+
+When a check with `repeat` fails during `integrate` or `ship`, and the failure output names a test file (the first path matching `(tests?|__tests__)/…\.(test|spec)\.[cm]?[jt]sx?` or `*.test.*`), the runner reruns that same check argv with the file appended, N times (N = the check's `repeat`, capped at 20; a check's own `flakeRuns` overrides N) against a temporary `git worktree add --detach` checkout of the run's base commit, removed afterward. The check result gains `flakeOnBase: {file, failed:k, runs:N}`, and a `flake on base: k/N (<file>)` line prints next to the failure; `k > 0` means the flake already existed on base, distinguishing it from an actual regression without a hand-run loop. This never changes the check's own pass/fail. Pass `--no-flake-check` to `integrate`/`ship` to disable it.
+
 ## Mutation checks
 
 `integrate <run-id> --mutants` runs mutation testing after normal integration and its `checks` have already written and validated the real files. For each declared `mutants` entry, in order, it: reads the target file, requires `find` to occur in it exactly once, writes the file with `find` replaced by `replace`, runs the shared `mutantCheck` command, and then always restores the file's original bytes and mode — including when the check times out or fails to launch — before moving to the next mutant. A mutant is never applied unless `find` matched exactly once.
@@ -322,17 +340,20 @@ The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs",
 `ship <run-id> --repo OWNER/NAME --pr payload.json` pushes an integrated run's branch, opens or updates its pull request, waits for CI, and merges once everything is green — refusing at any earlier step leaves nothing pushed or merged. It requires the run to already be integrated (`integrate <run-id>` must have run first) and reuses that run's saved manifest `checks`, re-running them against the committed tree before filling `<!-- swarm:checks -->` in the PR body.
 
 ```sh
-node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS]
+node tools/swarm.mjs ship <run-id> --pr payload.json
+node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]
 ```
 
-- `--repo OWNER/NAME`: required, the GitHub repository to push to and open the PR against.
+- `--repo OWNER/NAME`: optional; when omitted, derived from `git remote get-url origin` (both `https://github.com/...` and `git@github.com:...` forms, `.git` suffix stripped). If it cannot be parsed from origin, `ship` errors `cannot derive --repo from origin <url>; pass --repo OWNER/NAME`. When `--repo` is given and differs from origin's own `OWNER/NAME`, `ship` warns `--repo X differs from origin Y`. A gh call that fails with `HTTP 301`, `302`, `307`, or `308` in its output gets its error text suffixed `(repo moved? origin is OWNER/NAME)` — a bare redirect code otherwise gives no hint that the repository itself was renamed.
 - `--pr payload.json`: required, a JSON file `{title, head, base, body}` (`draft`/`maintainer_can_modify` optional), resolved against `--root`.
-- `--require-section NAME`: repeatable; refuse to push unless the PR body has a non-blank `## NAME` section with the checks placeholder already filled in.
+- `--require-section NAME`: repeatable; refuse to push unless the PR body has a non-blank `## NAME` section with the checks placeholder already filled in. When a required section's name case-insensitively matches "Mutation check" and the run's saved manifest declares no `mutants`, `ship` adds warning `no manifest mutants: declare "mutants" in the manifest and run "integrate --mutants" (see docs/verification.md)` and continues — declaring `mutants` is easy to forget under a mutation-check requirement, so the warning restates where the tooling already lives instead of letting it go unmentioned.
 - `--no-merge`: stop at `ready` once CI is green instead of merging.
 - `--merge-method squash|merge|rebase`: default `squash`.
 - `--timeout SECONDS` / `--poll SECONDS`: how long to wait for CI and how often to poll; defaults are 45 minutes and 20 seconds respectively (the grace period before an empty rollup counts as `no-ci` is five minutes and is not configurable from the CLI).
+- `--tag-timeout SECONDS`: how long to poll origin for a release tag after merging a PR whose diff changed `package.json`'s `version` (`git ls-remote --tags origin v<version>` every 10 seconds); default 180, `0` disables the wait.
+- `--no-flake-check`: disable the base-commit flake rerun described in [Flake on base](#flake-on-base) above.
 
-`ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
+`ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. When the merged PR's diff changed `package.json`'s `version`, the result also gains `tag: {name: 'v<version>', status: 'found'|'missing'|'skipped', waitedSeconds}`; a `missing` tag also adds warning `release tag v<version> not on origin after <n>s`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
 
 ## Go
 
@@ -365,6 +386,10 @@ Any agent can orchestrate; see [kickoff](kickoff.md) for skill loading and the
 seeds missing coordination files, adds `.swarm/` to gitignore and writes
 idempotent agent pointers unless opted out. `update` and `version` refuse
 `--root` before git access; invoke the shared install runner without it.
+When origin/main's `package.json` version is newer than the newest `v*` tag
+(the release-tag workflow has not published it yet), `update` returns
+`tagPending: true` and message `tag pending for <version>; retry in a minute`
+instead of reporting up to date.
 
 `doctor [PROVIDER|all] [--probe-local]` reports configuration/compatibility and
 root tool exclusion warnings. With no flag, no network requests are made.

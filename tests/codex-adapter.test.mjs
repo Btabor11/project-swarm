@@ -55,10 +55,10 @@ test('Codex argv always includes explicit model, all required flags, prompt and 
   for (const model of ['a', '.x:-_9', 'x'.repeat(80)]) assert.doesNotThrow(() => validateManifest(manifest({ model })));
 });
 
-test('codexMessage with no contract matches the pre-contract output byte for byte', () => {
+test('codexMessage with no contract includes the blocked rule', () => {
   const j = job();
   const message = codexMessage(j, { contract: null });
-  assert.equal(message, `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(j.context)}. You may edit only these declared outputs: ${JSON.stringify(j.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\nTASK:\n${j.prompt}\n`);
+  assert.equal(message, `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(j.context)}. You may edit only these declared outputs: ${JSON.stringify(j.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\nTASK:\n${j.prompt}\n`);
   const messageImplicit = codexMessage(j);
   assert.equal(messageImplicit, message);
 });
@@ -106,7 +106,7 @@ test('doctor checks platform, executable, version, login, and exact help flags w
   const calls = [];
   const exec = async (command, args) => { calls.push([command, args]); return { stdout: args.includes('--help') ? CODEX_FLAGS.join(' ') : 'fixture' }; };
   assert.equal((await doctor({ agent: 'codex', platform: 'darwin', exec })).status, 'compatible');
-  assert.deepEqual(calls.map(call => call[1]), [['sandbox-exec'], ['--version'], ['login', 'status'], ['exec', '--help']]);
+  assert.deepEqual(calls.slice(0, 4).map(call => call[1]), [['sandbox-exec'], ['--version'], ['login', 'status'], ['exec', '--help']]);
   for (const unavailable of ['sandbox-exec', '--version', 'login']) await assert.rejects(doctor({ agent: 'codex', platform: 'darwin', exec: async (cmd, args) => { if (args.includes(unavailable)) throw Error('unavailable'); return exec(cmd, args); } }), /unavailable/);
   for (const flag of CODEX_FLAGS) await assert.rejects(doctor({ agent: 'codex', platform: 'darwin', exec: async (_cmd, args) => ({ stdout: args.includes('--help') ? CODEX_FLAGS.filter(item => item !== flag).join(' ') : 'fixture' }) }), /required flags/);
   for (const platform of ['linux', 'win32']) {

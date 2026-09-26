@@ -52,9 +52,10 @@ Approximate subtotals may not add exactly to the total. The run counts and the
 final-week PR count cover different windows. Missing cost data is shown as
 reported, not inferred.
 
-How 1.14.0 was checked, and what is still open: [verification](verification.md).
+How 1.15.0 was checked, and what is still open: [verification](verification.md).
 
-The 1.14.0 follow-up records nine [release lessons](lessons.md), including
-permission-denial recovery and independently checked regression claims.
+The 1.15.0 follow-up records eight more [release lessons](lessons.md)
+(entries 10–17), including a mutation-tooling pointer, a repo-rename hint on
+`ship`, base-commit flake detection, and a job-declared result file.
 The historical costs and counts above remain observations from the original
 report; they are not new release measurements.

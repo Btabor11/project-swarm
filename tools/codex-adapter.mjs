@@ -55,9 +55,10 @@ export function codexArgs(job, { profile, worktree, lastMessage, message }) {
   return ['-f', sandboxPath(profile), 'codex', 'exec', '-m', job.model, '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--ephemeral', '-C', sandboxPath(worktree), '-o', sandboxPath(lastMessage), message];
 }
 export function codexMessage(job, { contract = null } = {}) {
-  const base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
+  const base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
-  return `${base}${contractSection}TASK:\n${job.prompt}\n`;
+  const testEnvironment = job.testEnv ? `Test environment (already set): ${Object.entries(job.testEnv).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : '';
+  return `${base}${contractSection}${testEnvironment}TASK:\n${job.prompt}\n`;
 }
 const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
 const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;
@@ -142,6 +143,21 @@ export async function codexDirtyFiles(root, job) {
   }
   return dirty;
 }
+async function sandboxProbe(exec) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-sandbox-'));
+  const root = await fs.realpath(temporary);
+  try {
+    await exec('git', ['init', root], { timeout: 10000 });
+    await fs.writeFile(path.join(root, 'package.json'), '{}');
+    const profile = path.join(root, 'sandbox.sb');
+    await fs.writeFile(profile, codexProfile({ worktree: root, commonDir: path.join(root, '.git'), metadataDir: path.join(root, '.git') }));
+    await exec('sandbox-exec', ['-f', profile, process.execPath, '-e', "require('fs').readFileSync('package.json')"], { cwd: root, timeout: 10000 });
+    return 'ok';
+  } catch (error) {
+    return /EPERM|Operation not permitted/.test(`${error.message} ${error.stderr ?? ''}`) ? `EPERM ${path.join(root, 'package.json')}` : error.message;
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+}
+
 export async function codexDoctor({ platform = process.platform, exec = execViaFile } = {}) {
   if (platform !== 'darwin') return { agent: 'codex', status: 'unsupported', platform, configured: false, liveVerified: false, note: 'macOS seatbelt is required' };
   const options = { timeout: 10000, maxBuffer: 1024 * 1024 };
@@ -153,5 +169,6 @@ export async function codexDoctor({ platform = process.platform, exec = execViaF
   if (missing().length) help = await exec('codex', ['exec', '--help'], options).catch(() => ({ stdout: '' }));
   if (!help.stdout) throw Error('Codex help probe failed (no or empty output)');
   if (missing().length) throw Error(`Codex lacks required flags: ${missing().join(', ')}`);
-  return { agent: 'codex', status: 'compatible', platform, version: version.stdout.trim(), auth: 'login status succeeded', liveVerified: false };
+  const probe = await sandboxProbe(exec);
+  return { agent: 'codex', checks: [{ name: 'sandbox probe', status: probe }], status: probe === 'ok' ? 'compatible' : 'failed', platform, version: version.stdout.trim(), auth: 'login status succeeded', liveVerified: false };
 }

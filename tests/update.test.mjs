@@ -84,7 +84,7 @@ test('update moves to the newest tag and reports the changelog between versions'
  const root=await updateFixture(t);
  await git(root,['checkout','v1.0.0']);
  const home=await tempDir(t);await fs.mkdir(path.join(home,'.claude'));
- const result=await updateInstall(root,{home});
+ const result=await updateInstall(root,{home,doctorAllImpl:async()=>({status:"report",providers:[]})});
  assert.equal(result.from,'1.0.0');
  assert.equal(result.to,'1.1.0');
  assert.equal(result.changelog.length,1);
