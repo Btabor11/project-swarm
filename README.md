@@ -8,40 +8,47 @@ It is designed for a human or coding agent acting as the coordinator. The coordi
 
 Codex CLI workers (`codex`) run in per-job git worktrees under a macOS seatbelt sandbox with an explicit model; see [provider setup](docs/providers.md). **The Codex sandbox is macOS-only** (it uses `sandbox-exec`): on Linux, WSL or Windows, `doctor codex` reports unsupported and `run` refuses codex jobs.
 
-## Install (for AI agents)
+## Agent kickoff
 
-If a user pastes this repository's URL and asks you to install it, follow these steps exactly. There is **one shared install per machine** at `~/.project-swarm` (override with the `PROJECT_SWARM_HOME` environment variable); every project on the machine links to it instead of getting its own copy.
+The orchestrator can be **any agent**: Claude Code, Codex CLI, Cursor, Gemini CLI,
+or another agent with file and command access. The worker adapter does not
+need to match the orchestrator. Paste this into your agent at project start:
 
-1. Check prerequisites: `node --version` must be 20.3 or newer, and `git --version` must succeed.
-2. Get the shared install onto the newest release:
-   - If `~/.project-swarm` does **not** exist yet:
-     ```sh
-     git clone https://github.com/RDW-Labz/project-swarm ~/.project-swarm
-     git -C ~/.project-swarm tag --list 'v*' --sort=-v:refname | head -1
-     git -C ~/.project-swarm checkout <the tag printed above>
-     ```
-   - If `~/.project-swarm` already exists, do not clone again; instead run:
-     ```sh
-     node ~/.project-swarm/tools/swarm.mjs update
-     ```
-3. Install the skill for every project on this machine:
-   ```sh
-   node ~/.project-swarm/tools/install.mjs --user
-   ```
-4. Check provider compatibility (no model call, no credentials created):
-   ```sh
-   node ~/.project-swarm/tools/swarm.mjs doctor all
-   ```
-5. Generate the onboarding summary and relay it to the user in plain words — what the swarm does, which providers are ready, how to ask for work, and what a run looks like:
-   ```sh
-   node ~/.project-swarm/tools/swarm.mjs onboard
-   ```
-6. Optional — link the current project so its `coordination/` examples exist and it resolves through the shared install:
-   ```sh
-   node ~/.project-swarm/tools/install.mjs /absolute/path/to/this/project
-   ```
+```text
+Use Project Swarm 1.13.0 for this project. Read docs/kickoff.md in the toolkit
+and perform its kickoff workflow. Ask me up front which model providers may
+receive project code and what spend ceiling applies; wait before model calls.
+Install from tag v1.13.0 in ~/.project-swarm, run tools/install.mjs --user,
+link this project, run doctor, validate and run the read-only and writing smoke
+jobs, inspect and integrate the reviewed writing output. Read the installed
+SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+HANDOFF.md after every dispatch, and start authorized work. Hand off at the
+10th build dispatch. Never run update/version with --root, commit .swarm/,
+or let a worker see secrets.
+```
 
-What never happens without the user explicitly asking: no API keys or credentials are ever created, read, or requested; `swarm update` never runs by itself (the skill only asks and waits for a yes); and an old per-project copy is never replaced until the user says yes to `update --projects --yes`.
+The [complete kickoff prompt](docs/kickoff.md) includes exact commands,
+one-line skill loading for each agent, provider consent, exclusions, and the
+handoff prompt. For every agent the direct loading line is:
+`Read ~/.project-swarm/current/skills/project-swarm/SKILL.md and coordination/ORCHESTRATOR.md.`
+Cursor also discovers `.cursor/rules/project-swarm.mdc`; other agents can
+follow the linked project's AGENTS.md or CLAUDE.md pointer.
+See the [anonymized field report](docs/field-report.md) for evidence and limits.
+
+## Shared install
+
+```sh
+git clone --branch v1.13.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
+node ~/.project-swarm/tools/install.mjs --user
+node ~/.project-swarm/tools/install.mjs /absolute/path/to/project
+node ~/.project-swarm/current/tools/swarm.mjs --root /absolute/path/to/project doctor all
+```
+
+For an existing install, preserve local edits and run the install's `version
+--check`, then `update` when authorized, both without `--root`. No npm install
+is needed. Linking writes idempotent agent pointers, adds `.swarm/` to
+`.gitignore`, and seeds each missing coordination file; existing files are
+reported as kept. Use `--no-agent-files` to opt out of project agent pointers.
 
 ## Start here
 
@@ -50,7 +57,7 @@ You need **Node.js 20.3+**, macOS/Linux/WSL, and one configured provider. For Cl
 Clone the public repository. No GitHub account or access invitation is required:
 
 ```sh
-git clone https://github.com/RDW-Labz/project-swarm.git
+git clone --branch v1.13.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git
 cd project-swarm
 npm test
 npm run check
@@ -77,15 +84,15 @@ A successful smoke run produces `coordination/swarm-handshake.md` after integrat
 
 ## Drop it into another project
 
-Project Swarm uses one shared install per machine (default `~/.project-swarm`, override with `PROJECT_SWARM_HOME`); projects no longer get their own copy of the runner, tests, or skill. Link a project to that install:
+Project Swarm uses one shared install per machine (conventionally `~/.project-swarm`; invoke your chosen install path explicitly); projects no longer get their own copy of the runner, tests, or skill. Link a project to that install:
 
 ```sh
 node ~/.project-swarm/tools/install.mjs /absolute/path/to/your-project
 ```
 
-This writes a small pointer file, `.project-swarm.json`, recording the install root and its version, and registers the project so `swarm update --projects` can find it later. It creates `coordination/` example manifests only if the project has none yet. It does not copy `tools/`, `tests/`, or `skills/` into the project, and does not change package scripts, global settings, credentials, or the target's Git remote.
+This writes a small pointer file, `.project-swarm.json`, recording the install root and its version, and registers the project so `swarm update --projects` can find it later. It seeds each missing `coordination/` manifest and the generic ORCHESTRATOR.md, HANDOFF.md, TASK.md and swarm-lessons.md templates, reporting added and kept files. Existing coordination files are never overwritten. It updates marker-delimited AGENTS.md and CLAUDE.md blocks plus `.cursor/rules/project-swarm.mdc` unless `--no-agent-files` is given. It does not copy `tools/`, `tests/`, or `skills/` into the project, and does not change package scripts, global settings, credentials, or the target's Git remote.
 
-Add `.swarm/` and `.project-swarm.json`'s sibling `.swarm-old-copy-*/` pattern to the target project's `.gitignore` if you track it. Then, in that project:
+Link adds `.swarm/` to `.gitignore`. Add `.swarm-old-copy-*/` too if migrating old copies, and configure the [tool exclusions](docs/kickoff.md#keep-copied-source-out-of-project-tooling). Then, in that project:
 
 ```sh
 node ~/.project-swarm/tools/swarm.mjs --root . doctor
@@ -93,7 +100,7 @@ node ~/.project-swarm/tools/swarm.mjs --root . preflight coordination/swarm-smok
 node ~/.project-swarm/tools/swarm.mjs --root . run coordination/swarm-smoke.json
 ```
 
-`--root` selects one explicit project; manifest filenames and all context/output paths resolve inside it, regardless of your shell's working directory. If a project's `.project-swarm.json` version no longer matches the installed version, `run`/`validate` print one warning to stderr — they still run; use `swarm update` in the install root to realign.
+`--root` is refused by update/version before git access. For project commands it selects one explicit project; manifest filenames and all context/output paths resolve inside it, regardless of your shell's working directory. If a project's `.project-swarm.json` version no longer matches the installed version, `run`/`validate` print one warning to stderr — they still run; use `swarm update` in the install root to realign.
 
 ## Updating
 
@@ -166,7 +173,23 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 
 ## Commands
 
-- `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all]` — check compatibility or environment configuration; no model call. Omitted provider means Claude.
+| Command | Purpose |
+| --- | --- |
+| `doctor [all] [--probe-local]` | Configuration, compatibility, optional local health, tool exclusions |
+| `validate` / `preflight` | Validate scope and review context before dispatch |
+| `run` / `ask` | Execute a manifest or one read-only question |
+| `status` / `monitor` / `wait` | Inspect progress or wait for completion |
+| `inspect` / `integrate` | Review proposals, then import and check them |
+| `cancel` | Stop the runner's owned workers |
+| `board` | Inspect live runs and file ownership |
+| `scout` | Research prior art for one goal |
+| `sweep` | Research several areas with a dispatch cost threshold |
+| `ship` | Push reviewed work, create/update its PR, wait for CI, merge when authorized |
+| `go` | Chain run, integration, optional commit and ship |
+| `version` / `update` | Inspect or upgrade the shared install; never use `--root` |
+| `onboard` | Explain workflow and local provider configuration |
+
+- `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local]` — check compatibility/configuration and root tool exclusions; no network by default. `--probe-local` checks only loopback HTTP health with a short timeout and no credentials; cloud keys remain configuration-only. Omitted provider means Claude.
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
 - `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange. Refuses to start if another live run in the same repository (any of its worktrees) is already writing one of this run's declared outputs, with no override; see `board` below. A job may declare `after: [ids]` so it starts only once those jobs complete; see [the manifest reference](docs/manifest-reference.md#after). When the manifest sets `contract`, a `codex` job's prompt also gets that file's current text injected directly, ahead of the task itself.
@@ -189,10 +212,12 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - `board` — print a read-only snapshot, `{"runs": [...]}`, of every live run this machine's user is tracking across every worktree of every repository, pruning any whose process is no longer alive. This is also what `run` consults to refuse a second writer. See [the manifest reference](docs/manifest-reference.md#board).
 - `ship <run-id> --repo OWNER/NAME --pr payload.json` — for an already-integrated run: push its branch, open or update the pull request, re-run the manifest's `checks` and fill them into the PR body, wait for CI, and merge once green. Refuses on a dirty tree, a failed check, a missing required `--require-section`, or a rejected push; never merges a PR body that opens with a `**needs ` human-review marker. Add `--no-merge` to stop at a green `ready` state, `--merge-method squash|merge|rebase` (default `squash`), or `--timeout`/`--poll` (seconds) to tune CI waiting. See [the manifest reference](docs/manifest-reference.md#ship).
 - `go <manifest.json|run-id> [--commit-message MSG] [--repo OWNER/NAME --pr payload.json] [--require-section NAME]... [--mutants] [--merge-method M] [--timeout S]` — one command from a manifest (or an already-started run) to a merged, reviewed change: run and wait (skipped for a run id), integrate with checks, commit exactly that run's integrated files (never `git add -A`) when `--commit-message` is given, then ship when `--repo`/`--pr` are given. Prints one JSON line and exits `0` for `merged`/`held`/`ready`/`integrated`/`committed`, `1` for `failed`. See [the manifest reference](docs/manifest-reference.md#go).
+- `scout --model M --brief FILE "goal"` — prior-art research for one large task; validates license claims and writes a report for review.
+- `sweep --model M --brief FILE --goals FILE [--max-usd N]` — prior-art research across several areas with a dispatch spending threshold; review findings before adoption.
 - `version [--check]` — print `{version, installRoot, tag}`; with `--check`, also `latest`/`updateAvailable` from the `origin` remote's tags (or `checkError` if the remote can't be reached). No local files change.
 - `update [--projects [DIR...]] [--yes]` — move this shared install to the newest release tag and reinstall the skill; or, with `--projects`, find old per-project copies/stale pointers and replace them with a pointer only when `--yes` is given.
-- `onboard` — print a plain-language summary of what the swarm does, which providers are ready on this machine, and how to ask for work; generated from local `doctor` checks, no model call.
-- `--root <project>` — explicitly choose the project, before or after the command.
+- `onboard` — print a plain-language summary of what the swarm does, provider compatibility and configuration on this machine, and how to ask for work; generated from local `doctor` checks, no model call.
+- `--root <project>` — explicitly choose the project, before or after a project command; refused for `update` and `version`.
 
 ## Learn, modify, and share
 

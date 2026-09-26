@@ -9,3 +9,4 @@ artifacts/
 .swarm-projects.json
 /versions/
 /current
+.tmp-e2e/

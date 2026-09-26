@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm 1.4 supports eight adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm supports eight adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 
@@ -28,7 +28,7 @@ node tools/swarm.mjs doctor ollama
 node tools/swarm.mjs doctor lambda
 ```
 
-`doctor` without an argument checks Claude for backward compatibility. `doctor all` reports each provider independently. API `configured` means an environment credential is present, or an Ollama or Lambda origin you operate has been selected. `liveVerified: false` is deliberate: API diagnostics do not contact endpoints or prove authentication, model access, server health, quota, or output-schema support. `run` checks only the providers its jobs actually select.
+`doctor` without an argument checks Claude for backward compatibility. `doctor all` reports each provider independently. API `configured` means an environment credential is present, or an Ollama or Lambda origin you operate has been selected. `liveVerified: false` is deliberate: Default API diagnostics do not contact endpoints or prove authentication, model access, server health, quota, or output-schema support. `--probe-local` opts into loopback HTTP health only, as detailed below. `run` checks only the providers its jobs actually select.
 
 Configure credentials using your normal secure environment/secret manager, outside the worker. Never put real keys in a manifest, command example committed to Git, prompt, or copied context. The runner does not read `.env` automatically. If you choose Node's environment-file feature, keep that file outside version control and never include it as context. API account access and billing are separate from cloning this public repository.
 
@@ -118,3 +118,12 @@ The profile starts with a home-directory read/write denial, then grants reads of
 The final rules re-deny reads/writes of `~/.oasis`, `~/Library/Keychains`, `~/.ssh`, `~/.aws`, and `~/.config`, plus mach lookups of `com.apple.SecurityServer` and `com.apple.securityd.xpc`. Optional per-job `readPaths` grants extra absolute read-only toolchain paths. Paths under denied directories (including resolved aliases) are refused. Paths embedded in profiles cannot contain quotes, backslashes, or control characters. Do not place secrets in the committed project or granted toolchain paths.
 
 The runner reads the final message from the `-o` file inside the job worktree (also inside the run directory), saves it as `response.txt`, and parses it as JSON: the reply's last fenced (```json or bare ```) block wins when it has one, otherwise its last top-level JSON object wins; any keys are accepted (there is no fixed `files_changed`/`notes` schema), since only declared outputs, never anything the JSON names, are ever collected. When that JSON is missing or does not parse, the runner falls back first to the `-o` file's own content if it alone parses as an object, then to the worktree's actual changes to declared outputs versus the job's base commit; either fallback still completes the job, keeps its worktree, and surfaces a `codex envelope fallback: result-file` or `codex envelope fallback: worktree` warning from `inspect`/`wait`. A worktree with no output changes and no parseable result file still fails the job and keeps the worktree for inspection. Parseable `tokens used` output is recorded as `total_tokens`, grouped under provider `codex`; missing usage and dollar cost remain unavailable. Unit tests inject fake workers and do not claim a live Codex or seatbelt smoke run.
+
+## Local health diagnostics
+
+`doctor all` makes no network requests by default. Add `--probe-local` to
+probe loopback Ollama `/api/tags` or Lambda `/v1/models` with a 1.5-second
+timeout. No credentials, code or model prompts are sent and redirects are
+refused. Remote origins and cloud keys remain configuration-only. A successful
+HTTP response means reachable, not authenticated or model-verified; a stopped
+server is reported unreachable while its configuration remains present.

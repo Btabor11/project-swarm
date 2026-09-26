@@ -10,7 +10,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
-import { API_AGENTS, apiDoctor, decodeContext, executeApi } from './api-adapters.mjs';
+import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown } from './scout.mjs';
@@ -24,6 +24,7 @@ const MAX_CONTEXT = 32 * 1024 * 1024;
 const MAX_FILE = 16 * 1024 * 1024;
 const PROGRESS_INTERVAL = 1000;
 const CLI_AGENTS = ['claude', 'codex', ...EXTRA_CLI_AGENTS];
+export const AGENTS = Object.freeze([...CLI_AGENTS, ...API_AGENTS]);
 export const TIERS = ['cheap', 'mid', 'expensive'];
 const API_PROGRESS_NOTE = 'Single-request API jobs return only when the request settles; incremental worker activity is not observable.';
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
@@ -1065,13 +1066,13 @@ export async function sweepRun(root, { model, brief, goals, maxUsd = 15, concurr
   };
 }
 
-export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform}={}){
+export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform, probeLocal=false, probeTimeoutMs=1500, fetchImpl=fetch}={}){
   const [major,minor]=process.versions.node.split('.').map(Number);
   if(major<20||(major===20&&minor<3))fail('Node 20.3 or newer is required');
   if(agent==='codex')return codexDoctor({exec,platform});
   if(process.platform==='win32')fail('Use macOS, Linux, or WSL; native Windows process-group cleanup is not supported');
   if(EXTRA_CLI_AGENTS.includes(agent))return extraCliDoctor(agent,exec);
-  if(agent!=='claude')return apiDoctor(agent,env);
+  if(agent!=='claude')return probeLocal ? probeLocalProvider(agent,env,{timeoutMs:probeTimeoutMs,fetchImpl}) : apiDoctor(agent,env);
   const options={timeout:10000,maxBuffer:1024*1024};
   const version=await exec('claude',['--version'],options);
   const required=['--restricted','--safe-mode','--tools','--permission-prompts','--strict-mcp-config','--mcp-config','--no-session-persistence','--no-chrome','--output-format'];
@@ -1085,9 +1086,9 @@ export async function doctor({exec=execViaFile, agent='claude', env=process.env,
   return {status:'compatible',node:process.versions.node,claude:version.stdout.trim(),auth:'not checked; use a live smoke job',liveVerified:false,platform:process.platform};
 }
 
-export async function doctorAll(){
+export async function doctorAll(options={}){
   const providers=[];
-  for(const agent of ['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS])try{providers.push({agent,...await doctor({agent})});}catch{providers.push({agent,status:'unavailable',liveVerified:false,note:'Provider compatibility check failed; run doctor for this provider for details.'});}
+  for(const agent of AGENTS)try{providers.push({agent,...await doctor({...options,agent})});}catch{providers.push({agent,status:'unavailable',liveVerified:false,note:'Provider compatibility check failed; run doctor for this provider for details.'});}
   return {status:'report',providers};
 }
 
@@ -1148,8 +1149,11 @@ export async function swarmVersion(root,{check=false}={}){
 // files it is about to replace so a dev checkout is never silently discarded.
 export async function updateInstall(root,{home}={}){
   root=await fs.realpath(root);
-  if(await gitDirty(root,['tools','skills']))fail('Refusing to update: uncommitted changes in tools/ or skills/');
   const beforePkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
+  if(beforePkg.name!=='project-swarm')fail('Refusing to update: target is not a project-swarm install');
+  const gitRoot=await fs.realpath((await execFileAsync('git',['-C',root,'rev-parse','--show-toplevel'],{encoding:'utf8'})).stdout.trim());
+  if(gitRoot!==root)fail('Refusing to update: project-swarm install must be its own git checkout');
+  if(await gitDirty(root,['tools','skills']))fail('Refusing to update: uncommitted changes in tools/ or skills/');
   const from=beforePkg.version;
   await execFileAsync('git',['-C',root,'fetch','--tags'],{encoding:'utf8'});
   const tagList=(await execFileAsync('git',['-C',root,'tag','--list','v*'],{encoding:'utf8'})).stdout.split('\n').map(line=>line.trim()).filter(Boolean);
@@ -1158,6 +1162,8 @@ export async function updateInstall(root,{home}={}){
   let currentTag=null;
   try{currentTag=(await execFileAsync('git',['-C',root,'describe','--tags','--exact-match'],{encoding:'utf8'})).stdout.trim();}catch{currentTag=null;}
   if(currentTag===latest)return {from,to:latest.replace(/^v/,''),upToDate:true};
+  const releasePkg=JSON.parse((await execFileAsync('git',['-C',root,'show',`${latest}:package.json`],{encoding:'utf8'})).stdout);
+  if(releasePkg.name!=='project-swarm'||releasePkg.version!==latest.slice(1))fail('Refusing to update: release tag is not a matching project-swarm install');
   await execFileAsync('git',['-C',root,'checkout','--detach',latest],{encoding:'utf8'});
   const afterPkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
   const to=afterPkg.version;
@@ -1219,7 +1225,7 @@ export async function updateProjects(root,{projects,yes=false}={}){
 }
 
 function agentReadiness(agent,result){
-  const ready=result.status==='compatible'||result.configured===true;
+  const ready=result.status==='compatible'||result.reachable===true;
   if(ready)return {agent,ready};
   const fix=result.note||(result.status==='unsupported'?'unsupported on this platform':`run: node tools/swarm.mjs doctor ${agent}`);
   return {agent,ready,fix};
@@ -1236,8 +1242,8 @@ export async function onboardReport(root,{doctorAllImpl=doctorAll}={}){
     '- Workers cannot see each other, other projects, your terminal, or credentials.',
     '- You review every proposed change before it is integrated.',
     '- Integration checks (tests, format) run right after files are written.','',
-    '## Workers ready on this machine',
-    ...providers.map(provider=>{const r=agentReadiness(provider.agent,provider);return r.ready?`- ${provider.agent}: ready`:`- ${provider.agent}: needs setup — ${r.fix}`;}),
+    '## Worker compatibility and configuration (a smoke run proves access)',
+    ...providers.map(provider=>{const r=agentReadiness(provider.agent,provider);return r.ready?`- ${provider.agent}: ${provider.reachable===true?'reachable (model unverified)':'compatible (smoke required)'}`:provider.configured===true?`- ${provider.agent}: configured; ${provider.reachable===false?'unreachable':'reachability not checked'} — run a bounded smoke job`:`- ${provider.agent}: needs setup — ${r.fix}`;}),
     '',
     '## Ask your agent for work like this',
     '- "Use Project Swarm to review src/checkout.js for bugs; do not edit it."',
@@ -1400,7 +1406,8 @@ async function main() {
   const args=process.argv.slice(2);let root=defaultRoot(ownRoot);
   const rootIndex=args.indexOf('--root');
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|all] | validate MANIFEST | preflight MANIFEST | board | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME --pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local] | validate MANIFEST | preflight MANIFEST | board | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] | cancel RUN | ship RUN --repo OWNER/NAME --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME --pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(rootIndex!==-1&&['version','update'].includes(args[0]))fail('--root is not allowed for version/update; invoke the shared install runner without --root');
   if(args[0]==='version'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
@@ -1515,6 +1522,8 @@ async function main() {
     if(result.status!=='complete')process.exitCode=1;
     return;
   }
+  const probeLocal=args[0]==='doctor'&&args.includes('--probe-local');
+  if(probeLocal)args.splice(args.indexOf('--probe-local'),1);
   const [command,argument,...rest]=args;
   // monitor keeps its JSON snapshot as the default; --view/--watch are read-only human rendering
   // extras consumed here so the generic argument-count check below still fails on anything else.
@@ -1611,7 +1620,8 @@ async function main() {
     return;
   }
   if(command==='doctor'){
-    result=argument==='all'?await doctorAll():await doctor({agent:argument??'claude'});
+    result=argument==='all'?await doctorAll({probeLocal}):await doctor({agent:argument??'claude',probeLocal});
+    result.warnings=await (await import('./preflight.mjs')).projectToolWarnings(root);
   }
   else if(command==='board')result=await boardSummary();
   else if(command==='run'||command==='validate'||command==='preflight'){

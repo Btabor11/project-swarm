@@ -1,6 +1,6 @@
 ---
 name: project-swarm
-description: Coordinate fresh Claude CLI or tool-free API workers on bounded tasks in one repository, with copied workspaces, explicit file ownership, saved exchanges, cancellation, and conflict-checked integration. Use when the user requests parallel agent work or a reusable local agent swarm.
+description: Coordinate fresh CLI or tool-free API workers with any agent as orchestrator on bounded tasks in one repository, with copied workspaces, explicit file ownership, saved exchanges, cancellation, and conflict-checked integration. Use when the user requests parallel agent work or a reusable local agent swarm.
 ---
 
 # Project swarm
@@ -11,13 +11,32 @@ Eight adapters are available: `codex`, `claude`, `hermes`, `qwen`, `openai`, `ge
 
 This skill runs against one shared install per machine (`{{SWARM_RUNNER}}`), not a copy inside this project. All commands below use that same runner path. Installs are versioned: `{{SWARM_RUNNER}}` always resolves through a `current` symlink, kept stable for a run already in flight even if a later install/update repoints it to a newer version underneath it.
 
+## Any agent can orchestrate
+
+Claude Code, Codex CLI, Cursor, Gemini CLI and other agents can hold the
+orchestrator seat; the host does not need a matching worker adapter. The
+one-line loading prompt for each is: `Read the installed Project Swarm SKILL.md
+and coordination/ORCHESTRATOR.md.` Cursor can follow its project rule; other
+agents can follow AGENTS.md or CLAUDE.md. The shared installed skill lives at
+`<install>/current/skills/project-swarm/SKILL.md`, even without agent homes.
+
+Follow [Agent kickoff](references/kickoff.md) for a new project: install from
+v1.13.0, run `install.mjs --user`, link, doctor, and the read-only and writing
+smoke tests. Ask up front which providers may receive code and the spend
+ceiling; record answers before model calls. Fill TASK.md from the goal, keep
+HANDOFF.md and TASK.md current after every dispatch, log swarm-lessons.md,
+and hand off at the 10th build dispatch using the seat's exact prompt.
+Never commit `.swarm/`, let a worker see secrets, or pass `--root` to update/version.
+Link preserves existing seed files, updates only agent marker blocks and adds
+`.swarm/` to `.gitignore`; `--no-agent-files` opts out of agent pointers.
+
 ## Session start
 
 Once per session, run `node {{SWARM_RUNNER}} version --check`. If `updateAvailable` is true, tell the user: "Swarm update available: `<version>` -> `<latest>`. Want me to run it?" Only run `node {{SWARM_RUNNER}} update` after the user says yes; never update on your own. If `checkError` is present, the check simply could not reach the remote (offline, no network approval) — report that plainly and continue; it is not a failure of the swarm itself. If you notice a project with its own `tools/swarm.mjs` and `skills/project-swarm/SKILL.md` (an old per-project copy instead of a pointer), mention that `node {{SWARM_RUNNER}} update --projects` can find and replace old copies, and only run it with `--yes` after the user agrees.
 
 ## Prerequisites and scope
 
-Requires Node 20.3+, macOS/Linux or WSL (native Windows is unsupported). Run `node {{SWARM_RUNNER}} doctor all` to report provider compatibility/configuration; it does not verify authentication. Claude jobs require Claude Code installed and authenticated; API-only runs do not. OpenAI reads OPENAI_API_KEY; Gemini reads GEMINI_API_KEY or GOOGLE_API_KEY; Ollama defaults to localhost. Read [provider setup](references/providers.md) before choosing an API. Never request credentials in chat or copy them into manifests. Check `claude --version` and `claude --help` if the environment changed; the adapter requires restricted/safe mode, explicit tool selection, noninteractive permissions, strict empty MCP configuration, and streaming JSON output. If the CLI rejects a required flag or authentication fails, report the actual error and stop that worker. Do not weaken isolation to force a connection or bypass execution approval.
+Requires Node 20.3+, macOS/Linux or WSL (native Windows is unsupported). Run `node {{SWARM_RUNNER}} doctor all` to report provider compatibility/configuration; it does not verify model access. By default it makes no network requests. Add `--probe-local` for a short, credential-free loopback Ollama/Lambda health probe; remote/cloud endpoints stay configuration-only. Review root tool exclusion warnings before the first run. Claude jobs require Claude Code installed and authenticated; API-only runs do not. OpenAI reads OPENAI_API_KEY; Gemini reads GEMINI_API_KEY or GOOGLE_API_KEY; Ollama defaults to localhost. Read [provider setup](references/providers.md) before choosing an API. Never request credentials in chat or copy them into manifests. Check `claude --version` and `claude --help` if the environment changed; the adapter requires restricted/safe mode, explicit tool selection, noninteractive permissions, strict empty MCP configuration, and streaming JSON output. If the CLI rejects a required flag or authentication fails, report the actual error and stop that worker. Do not weaken isolation to force a connection or bypass execution approval.
 
 Each worker receives only explicitly named files copied into `.swarm/workspaces/<run-id>/<job-id>`. Existing output files are also copied so workers can edit them. For Claude the tool set is Read/Glob/Grep plus Write/Edit for writing jobs; shell, agent, and MCP tools are unavailable. The prompt prohibits reads outside that copy. This is scoped orchestration and guarded integration, **not an operating-system security sandbox**: Claude authentication/configuration is still handled by its CLI, and its filesystem tools are not proven to block every absolute read. Do not put secrets in worker context. Use an approved container/OS sandbox if adversarial filesystem isolation is required.
 
@@ -84,7 +103,7 @@ A design choice that is not already in the plan is never a reason to escalate ti
 
 Run `node --test tests/*.test.mjs` to validate isolation checks, conflicts, result errors, timeout, cancellation, integration, and advisory preflight. For a first connection, perform one read-only and one small writing smoke exchange and inspect their responses before assigning substantial work. Integrate only the writing output you reviewed. Report which provider/model actually answered, what changed, checks run, and any limits.
 
-To use this in another project, link it to the same shared install: `node {{SWARM_RUNNER}} --root /path/to/project` is available immediately, or run `node ~/.project-swarm/tools/install.mjs /path/to/project` to write that project's `.project-swarm.json` pointer and seed `coordination/` examples if it has none. Projects no longer get a copy of the runner, tests, or skill; every project on this machine shares the one install at the tag `swarm update` last moved it to. Add `.swarm/` to that project's `.gitignore`. `--root` selects one explicit project; workers still receive only declared files. No global settings are modified.
+To use this in another project, link it to the same shared install: `node {{SWARM_RUNNER}} --root /path/to/project` is available immediately, or run `node ~/.project-swarm/tools/install.mjs /path/to/project` to write that project's `.project-swarm.json` pointer and seed each missing `coordination/` example and seat template without overwriting existing files. Projects no longer get a copy of the runner, tests, or skill; every project on this machine shares the one install at the tag `swarm update` last moved it to. Add `.swarm/` to that project's `.gitignore`. `--root` selects one explicit project; workers still receive only declared files. No global settings are modified.
 
 Consult [setup](references/setup.md), [workflow recipes](references/workflows.md), [command and manifest reference](references/manifest-reference.md), [extension guide](references/extending.md), and [the website case study](references/case-study.md) when installed. In the standalone repository these guides live in `docs/`. Report actual provider model metadata from run status; an alias is not proof of which model answered.
 

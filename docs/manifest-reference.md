@@ -310,3 +310,17 @@ node tools/swarm.mjs go <run-id> --commit-message "Add render review"
 `monitor` includes content-free CLI byte counts and output timestamps where observable. API requests without streaming report unavailable progress; neither output nor silence proves whether a worker is making useful progress.
 
 Preflight exits **0 for a valid report even when `reviewRequired` is true**: advisories require coordinator judgment and an agreed contract can justify parallel snapshots. Invalid manifests/paths exit nonzero. CI that requires a reviewed plan must inspect `reviewRequired`, `advisories`, and `snapshotHazards`; a zero exit is validation, not approval to dispatch. Preflight reads and validates file contents (including API UTF-8 checks), so large repeated contexts also incur repeated local I/O.
+
+## Kickoff diagnostics and install commands
+
+Any agent can orchestrate; see [kickoff](kickoff.md) for skill loading and the
+10-dispatch handoff. `install.mjs PROJECT [--no-agent-files]` links a project,
+seeds missing coordination files, adds `.swarm/` to gitignore and writes
+idempotent agent pointers unless opted out. `update` and `version` refuse
+`--root` before git access; invoke the shared install runner without it.
+
+`doctor [PROVIDER|all] [--probe-local]` reports configuration/compatibility and
+root tool exclusion warnings. With no flag, no network requests are made.
+Opt-in probes check loopback Ollama/Lambda HTTP health, not model access, with
+a short timeout and no credentials or redirects. Remote endpoints stay
+configuration-only. `preflight` includes the same static exclusion advisories.

@@ -45,3 +45,5 @@ The runner accepts up to 32 concurrent jobs and 256 jobs per manifest; concurren
 The package supports Claude, Hermes, Qwen, OpenAI, Gemini, Ollama, and Lambda adapters. The Claude evidence above does not verify the other providers. Follow the [provider guide](providers.md), check compatibility, and run a bounded exchange with your own account and selected model before assigning substantial work.
 
 Copied workspaces and restricted tools reduce accidental scope expansion. They are not an operating-system security sandbox; see [the security boundary](../SECURITY.md).
+
+For the later multi-repository production observations, costs, lessons and kickoff verification, see the [anonymized field report](field-report.md).
