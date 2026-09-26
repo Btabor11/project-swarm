@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add box checks: Claude workers can call `run_check(name)` to validate code in a sandboxed OpenShell environment; manifest defines named checks with argv, working directory, and timeout; configuration via `SWARM_BOX_URL` and `SWARM_BOX_TOKEN_FILE` environment variables, never in manifests.
+
 ## 1.15.0
 
 - Point at existing mutation tooling instead of hand-writing mutant scripts: `ship ... --require-section` warns `no manifest mutants: declare "mutants" in the manifest and run "integrate --mutants" (see docs/verification.md)` when the run's manifest declares none, and the skill's ship checklist repeats the line.

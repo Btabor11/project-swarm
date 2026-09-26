@@ -70,6 +70,51 @@ A self-hosted origin also receives `chat_template_kwargs: { enable_thinking: fal
 
 This is an Ollama chat/schema adapter, not a universal OpenAI-compatible proxy adapter. It does not assume every local model supports JSON schema reliably. If local inference is slow, first reduce input/output scope and concurrency rather than disabling validation.
 
+## Box checks (run_check)
+
+Claude workers can run tests and checks inside a dedicated OpenShell sandbox (`swarm-box`) without shell access to the host. A job's manifest declares named checks with argv, working directory, and timeout; the worker calls `run_check(name)` to execute them, receiving exit code, elapsed time, and output tails.
+
+### Manifest fields
+
+Under a top-level `boxChecks` object, each check is a named entry:
+```json
+{
+  "boxChecks": {
+    "test-name": {
+      "argv": ["npm", "test"],
+      "cwd": "services/example",
+      "timeoutMs": 60000
+    }
+  }
+}
+```
+- `argv`: array of command and arguments (no shell metacharacters; `argv[0]` must be in the sandbox's allowed programs: `node`, `npx`, `npm`, `python3`, `pytest`, `tsc`)
+- `cwd`: optional working directory relative to the workspace root
+- `timeoutMs`: optional timeout in milliseconds (defaults based on sandbox configuration)
+
+A job's `boxChecks` field names the subset of checks it can invoke: `"boxChecks": ["test-name"]`.
+
+### Configuration
+
+Configure via local environment outside the manifest (never include credentials in manifests):
+- `SWARM_BOX_URL`: origin of the Helm box API (e.g. `http://dev2:8000`)
+- `SWARM_BOX_TOKEN_FILE`: path to a file containing the bearer token
+
+### What the worker can do
+
+- Call `run_check(name)` for each declared check after making edits
+- Receive: exit code (0 on success), seconds elapsed, last ~20 KB of stdout and stderr
+- Re-run checks multiple times to verify fixes
+- Stop and return `blocked` if a check fails and the failure blocks the task
+
+### What the worker cannot do
+
+- Run arbitrary commands (only the manifest's declared checks)
+- Access the host shell or filesystem
+- Access the network (the sandbox has no egress)
+- Receive check stdout/stderr beyond the configured tail limit
+- Import check outputs back into the workspace (the box is for validation only)
+
 ## Official protocol references
 
 Implementation references, reviewed for this release:
