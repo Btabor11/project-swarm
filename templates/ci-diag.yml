@@ -1,0 +1,42 @@
+# Copy to .github/workflows/ci-diag.yml in the target project.
+name: CI diagnostic
+on:
+  push:
+    branches: ['diag-*']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Edit this single OS to match the failing CI platform.
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verbose test timings
+        continue-on-error: true
+        run: npx vitest run --reporter=verbose --testTimeout=30000
+
+      # Optional native app idle-CPU measurement (edit build and executable).
+      # - name: Build native app
+      #   run: npm run build:native
+      # - name: Measure idle CPU after startup (Unix runner)
+      #   shell: bash
+      #   run: |
+      #     ./path/to/native-app &
+      #     app_pid=$!
+      #     trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+      #     sleep 20
+      #     for sample in 1 2 3 4 5; do
+      #       ps -p "$app_pid" -o pid=,pcpu=,etime=
+      #       sleep 5
+      #     done

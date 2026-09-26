@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, waitRun, inspectRun } from '../tools/swarm.mjs';
+import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, waitRun, inspectRun, inspectResults, redcheckRun } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -314,4 +314,216 @@ test('integrate --mutants expands {root} inside a mutantCheck argv item to the r
   const result = await integrateRun(root, state.id, { mutants: true });
   assert.equal(result.mutants[0].status, 'killed');
   assert.equal(await fs.readFile(path.join(root, 'root-received.txt'), 'utf8'), `PREFIX=${await fs.realpath(root)}/marker`);
+});
+
+
+// --- release lessons: denied reads and independently checked regressions --------------------
+
+const deniedResult = (extra = {}) => `console.log(${JSON.stringify(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Finished', permission_denials: [{ tool_name: 'Read', tool_input: { file_path: 'outside.txt' } }], ...extra }))});`;
+
+test('denial-only success completes, warns in run and inspect results, and integrates', async t => {
+  const root = await fixture(t);
+  const denials = [{ tool_name: 'Read', tool_input: { file_path: 'outside.txt' } }, { tool_name: 'Grep', tool_input: { pattern: 'x'.repeat(300) } }];
+  const state = await runManifest(root, manifest(), { spawnImpl: fake(`fs.writeFileSync('input.txt','updated');${deniedResult({ permission_denials: denials })}`) });
+  assert.equal(state.status, 'complete');
+  assert.equal(state.jobs[0].error, null);
+  assert.equal(state.warnings[0], 'permission denials: writer: Read outside.txt');
+  assert.match(state.warnings[1], /^permission denials: writer: Grep /);
+  assert.equal(state.warnings[1].length, 200);
+  assert.deepEqual((await inspectResults(root, state.id)).warnings, state.warnings);
+  const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'inspect', state.id, '--results']);
+  assert.deepEqual(JSON.parse(stdout).warnings, state.warnings);
+  assert.match(await fs.readFile(path.join(root, '.swarm/runs', state.id, 'writer/message.txt'), 'utf8'), /Read only the files in your context; other reads may be denied\./);
+  await integrateRun(root, state.id);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+});
+
+test('denials never mask a nonzero exit, error result, or malformed provider stream', async t => {
+  const root = await fixture(t);
+  for (const ending of [`${deniedResult()}process.exitCode=7;`, deniedResult({ is_error: true, subtype: 'error_during_execution' }), `console.log('bad json');${deniedResult()}`]) {
+    const state = await runManifest(root, manifest(), { spawnImpl: fake(`fs.writeFileSync('input.txt','updated');${ending}`) });
+    assert.equal(state.status, 'failed');
+    assert.ok(state.jobs[0].keptWorkspace);
+    assert.equal(await fs.readFile(path.join(state.jobs[0].keptWorkspace, 'input.txt'), 'utf8'), 'updated');
+    await assert.rejects(integrateRun(root, state.id), /Only a complete run/);
+  }
+});
+
+test('failed workers retain changed declared outputs but unchanged failures do not claim retained work', async t => {
+  const root = await fixture(t);
+  const changed = await runManifest(root, manifest(), { spawnImpl: fake("fs.writeFileSync('input.txt','partial');process.exit(7)") });
+  assert.equal(changed.status, 'failed');
+  assert.equal(await fs.readFile(path.join(changed.jobs[0].keptWorkspace, 'input.txt'), 'utf8'), 'partial');
+  const unchanged = await runManifest(root, manifest(), { spawnImpl: fake('process.exit(7)') });
+  assert.equal(unchanged.jobs[0].keptWorkspace, null);
+});
+
+test('denials without a response or changed output fail; a written output alone suffices', async t => {
+  const root = await fixture(t);
+  const noResult = await runManifest(root, manifest(), { spawnImpl: fake(deniedResult({ result: '' })) });
+  assert.equal(noResult.status, 'failed');
+  const written = await runManifest(root, manifest(), { spawnImpl: fake(`fs.writeFileSync('input.txt','updated');${deniedResult({ result: '' })}`) });
+  assert.equal(written.status, 'complete');
+  const missing = await runManifest(root, manifest([job({ outputs: ['missing.txt'] })]), { spawnImpl: fake(deniedResult()) });
+  assert.equal(missing.status, 'failed');
+});
+
+async function regressionRun(t, { integrate = true } = {}) {
+  const root = await fixture(t);
+  const tests = ['tests/regression.cjs', 'test/regression.cjs', 'src/example.test.cjs', 'src/example.spec.cjs', 'src/example_test.cjs'];
+  const testBody = "const assert=require('node:assert/strict');const fs=require('node:fs');assert.equal(fs.readFileSync('input.txt','utf8'),'updated');";
+  const files = Object.fromEntries(tests.map(file => [file, testBody]));
+  files['input.txt'] = 'updated';
+  files['added.txt'] = 'new output';
+  const script = `for(const [file,body] of Object.entries(${JSON.stringify(files)})){fs.mkdirSync(file.includes('/')?file.slice(0,file.lastIndexOf('/')):'.',{recursive:true});fs.writeFileSync(file,body);} ${done}`;
+  const state = await runManifest(root, manifest([job({ outputs: Object.keys(files) })]), { spawnImpl: fake(script) });
+  assert.equal(state.status, 'complete');
+  if (integrate) await integrateRun(root, state.id);
+  return { root, state, tests, testBody };
+}
+
+test('redcheck runs regression tests against base, preserves every test naming pattern, restores new and existing outputs', async t => {
+  const { root, state, tests, testBody } = await regressionRun(t);
+  await fs.chmod(path.join(root, 'input.txt'), 0o755);
+  const result = await redcheckRun(root, state.id, [process.execPath, 'tests/regression.cjs']);
+  assert.equal(result.status, 'red');
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.restored, ['input.txt', 'added.txt']);
+  assert.match(result.tail, /AssertionError/);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+  assert.equal((await fs.stat(path.join(root, 'input.txt'))).mode & 0o777, 0o755);
+  assert.equal(await fs.readFile(path.join(root, 'added.txt'), 'utf8'), 'new output');
+  for (const file of tests) assert.equal(await fs.readFile(path.join(root, file), 'utf8'), testBody);
+});
+
+test('redcheck green means the command did not detect the old implementation and caps output', async t => {
+  const { root, state } = await regressionRun(t);
+  const result = await redcheckRun(root, state.id, [process.execPath, '-e', "process.stdout.write('é'.repeat(3000))"]);
+  assert.equal(result.status, 'green');
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.tail, 'é'.repeat(2000));
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+});
+
+test('redcheck restores all job outputs on spawn errors, timeouts, and signal termination', async t => {
+  const { root, state } = await regressionRun(t);
+  for (const [argv, options] of [
+    [['missing-redcheck-executable'], {}],
+    [[process.execPath, '-e', '1'], { spawnImpl: () => { throw Error('launch failed'); } }],
+    [[process.execPath, '-e', 'setInterval(()=>{},1000)'], { timeoutMs: 50 }],
+    [[process.execPath, '-e', "process.kill(process.pid,'SIGTERM')"], {}],
+  ]) {
+    const result = await redcheckRun(root, state.id, argv, options);
+    assert.equal(result.status, 'error');
+    assert.equal(result.exitCode, null);
+    assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+    assert.equal(await fs.readFile(path.join(root, 'added.txt'), 'utf8'), 'new output');
+  }
+});
+
+test('redcheck refuses unrelated edits before any mutation or command execution', async t => {
+  const { root, state } = await regressionRun(t);
+  await fs.writeFile(path.join(root, 'added.txt'), 'coordinator edit');
+  const result = await redcheckRun(root, state.id, [process.execPath, '-e', '1'], { spawnImpl: () => assert.fail('must not run') });
+  assert.equal(result.status, 'error');
+  assert.match(result.tail, /Redcheck conflict: added.txt/);
+  assert.deepEqual(result.restored, []);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+  assert.equal(await fs.readFile(path.join(root, 'added.txt'), 'utf8'), 'coordinator edit');
+});
+
+test('redcheck accepts a complete unintegrated run and restores job versions afterward', async t => {
+  const { root, state } = await regressionRun(t, { integrate: false });
+  const script = "const fs=require('node:fs');if(fs.readFileSync('input.txt','utf8')!=='original'||fs.existsSync('added.txt'))process.exit(2);process.exit(1)";
+  const result = await redcheckRun(root, state.id, [process.execPath, '-e', script]);
+  assert.equal(result.status, 'red');
+  assert.equal(result.exitCode, 1);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+  assert.equal(await fs.readFile(path.join(root, 'added.txt'), 'utf8'), 'new output');
+});
+
+test('redcheck uses verified git base bytes for hash-only records', async t => {
+  const root = await codexFixture(t);
+  const state = await runManifest(root, manifest([job({ context: ['tracked.txt'], outputs: ['tracked.txt'] })]), { spawnImpl: fake(`fs.writeFileSync('tracked.txt','updated');${done}`) });
+  await integrateRun(root, state.id);
+  const saved = await readState(root, state.id);
+  delete saved.jobs[0].baseWorkspace;
+  await fs.writeFile(path.join(root, '.swarm/runs', state.id, 'state.json'), JSON.stringify(saved));
+  const result = await redcheckRun(root, state.id, [process.execPath, '-e', "process.exit(require('fs').readFileSync('tracked.txt','utf8')==='tracked content'?1:0)"]);
+  assert.equal(result.status, 'red');
+  assert.equal(await fs.readFile(path.join(root, 'tracked.txt'), 'utf8'), 'updated');
+  saved.jobs[0].baseHashes['tracked.txt'] = 'bad-hash';
+  await fs.writeFile(path.join(root, '.swarm/runs', state.id, 'state.json'), JSON.stringify(saved));
+  const refused = await redcheckRun(root, state.id, [process.execPath, '-e', '1']);
+  assert.equal(refused.status, 'error');
+  assert.match(refused.tail, /Base content unavailable or mismatched/);
+  assert.equal(await fs.readFile(path.join(root, 'tracked.txt'), 'utf8'), 'updated');
+});
+
+test('redcheck CLI prints one JSON line, exits 0 on red and 1 on green or error, and passes argv literally', async t => {
+  const { root, state } = await regressionRun(t);
+  const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'redcheck', state.id, '--test', process.execPath, 'tests/regression.cjs']);
+  assert.equal(stdout.trim().split('\n').length, 1);
+  assert.equal(JSON.parse(stdout).status, 'red');
+  for (const [command, status] of [
+    [[process.execPath, '-e', 'process.stdout.write(process.argv.slice(1).join("|"))', '--', '--root', 'literal;arg'], 'green'],
+    [['missing-redcheck-executable'], 'error'],
+    [[], 'error'],
+  ]) {
+    await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'redcheck', state.id, '--test', ...command]), error => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stdout.trim().split('\n').length, 1);
+      const result = JSON.parse(error.stdout);
+      assert.equal(result.status, status);
+      if (status === 'green') assert.equal(result.tail, '--root|literal;arg');
+      return true;
+    });
+  }
+});
+
+test('redcheck refuses failed runs, altered metadata, and an active integration lock', async t => {
+  const root = await fixture(t);
+  const failed = await runManifest(root, manifest(), { spawnImpl: fake('process.exit(7)') });
+  assert.equal((await redcheckRun(root, failed.id, [process.execPath, '-e', '1'])).status, 'error');
+  const state = await runManifest(root, manifest(), { spawnImpl: update });
+  await fs.mkdir(path.join(root, '.swarm/integration.lock'));
+  const locked = await redcheckRun(root, state.id, [process.execPath, '-e', '1']);
+  assert.equal(locked.status, 'error');
+  assert.ok((await fs.stat(path.join(root, '.swarm/integration.lock'))).isDirectory());
+  await fs.rmdir(path.join(root, '.swarm/integration.lock'));
+  state.jobs[0].outputs.push('unowned.txt');
+  await fs.writeFile(path.join(root, '.swarm/runs', state.id, 'state.json'), JSON.stringify(state));
+  assert.match((await redcheckRun(root, state.id, [process.execPath, '-e', '1'])).tail, /metadata does not match/);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'original');
+});
+
+
+test('failed Codex jobs keep a changed declared output in their actual worktree', async t => {
+  const root = await codexFixture(t);
+  const state = await runManifest(root, codexManifest(codexJob({ outputs: ['tracked.txt'] })), {
+    platform: 'darwin',
+    spawnImpl: fake("fs.writeFileSync('tracked.txt','partial work');process.exit(7)"),
+  });
+  assert.equal(state.status, 'failed');
+  const kept = state.jobs[0].keptWorkspace;
+  assert.equal(kept, path.join(root, '.swarm/runs', state.id, 'worktrees/writer'));
+  assert.equal(await fs.readFile(path.join(kept, 'tracked.txt'), 'utf8'), 'partial work');
+  assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(kept), true);
+  await assert.rejects(integrateRun(root, state.id), /Only a complete run/);
+});
+
+
+test('Codex output-validation failures preserve other completed declared files', async t => {
+  const root = await codexFixture(t);
+  const state = await runManifest(root, codexManifest(codexJob({ outputs: ['tracked.txt', 'missing.txt'] })), {
+    platform: 'darwin',
+    spawnImpl: (_command, args, options) => {
+      const resultPath = args[args.indexOf('-o') + 1];
+      return fake(`fs.writeFileSync('tracked.txt','finished work');fs.writeFileSync(${JSON.stringify(resultPath)},'{}')`)(_command, args, options);
+    },
+  });
+  assert.equal(state.status, 'failed');
+  assert.match(state.jobs[0].error, /Missing output/);
+  assert.equal(await fs.readFile(path.join(state.jobs[0].keptWorkspace, 'tracked.txt'), 'utf8'), 'finished work');
+  await assert.rejects(integrateRun(root, state.id), /Only a complete run/);
 });

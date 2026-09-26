@@ -45,11 +45,16 @@ benchmark. Models are grouped by tier (see [orchestration](orchestration.md)).
 | Hand-written mutation scripts | 28 |
 | PRs merged in the final week | about 50 |
 | Lessons logged | 79 |
-| Lessons folded into 1.13.0 code or guidance | 18 |
+| Lessons folded into earlier code or guidance | 18 |
 | Lessons still open | 5 |
 
 Approximate subtotals may not add exactly to the total. The run counts and the
 final-week PR count cover different windows. Missing cost data is shown as
 reported, not inferred.
 
-How 1.13.0 was checked, and what is still open: [verification](verification.md).
+How 1.14.0 was checked, and what is still open: [verification](verification.md).
+
+The 1.14.0 follow-up records nine [release lessons](lessons.md), including
+permission-denial recovery and independently checked regression claims.
+The historical costs and counts above remain observations from the original
+report; they are not new release measurements.

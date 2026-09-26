@@ -83,3 +83,38 @@ Jobs receive snapshots before execution. Setting concurrency to 1 does not creat
 A failed run cannot integrate. Correct the task, missing setup, or provider issue and start a fresh run. Cancellation stops the runner's owned processes/requests and prevents queued jobs from starting; it does not contact unrelated sessions or guarantee that a remote provider stopped billing. Do not start replacement workers until the cancelled run has settled.
 
 Use recorded requested/resolved model fields, counts, and actual tests in the completion report. Missing usage/cost stays unavailable. Provider usage fields are aggregated within each provider only; different APIs count tokens differently.
+
+
+## Evidence in job prompts
+
+Use separate **Evidence (measured)** and **Hypothesis** sections. Record
+commands actually run, their outputs, and observed event order as evidence.
+Keep suspected causes and handoff guesses in the hypothesis section so a
+worker can test them instead of building on an unproven premise.
+
+Before accepting a regression test, run it with the fix, then run
+`node tools/swarm.mjs redcheck <run-id> --test <argv...>`. Inspect the failing
+assertion on base code and rerun with the restored fix. A worker's report that
+a test fails on old code is a claim until the coordinator reproduces it.
+
+## Bisect on CI
+
+For a CI-only failure, bisect in the failing CI environment. Handoff guesses
+were wrong in one observed incident; throwaway branches and a push-triggered,
+single-OS diagnostic workflow narrowed the cause in three short rounds.
+
+Copy `templates/ci-diag.yml` into the target's workflow directory. Edit its
+one-OS matrix for the failing platform and use disposable `diag-*` branches.
+Keep a control branch with the same diagnostic workflow and a known baseline.
+Push candidate halves of the suspect changes, compare verbose per-test timings
+against the control, and repeat on the failing half. Use no pull requests for
+these diagnostic branches. Record commit, OS, command, failure and timings for
+each round. A long test timeout helps reveal the specific wait that stalled.
+The template also includes an optional commented native-app idle-CPU probe.
+
+## Fresh context per topic
+
+Hand off at the dispatch limit (10 build dispatches) or when the next work is
+unrelated, whichever comes first. Update the task and handoff records with
+measured evidence, remaining hypotheses and checks, then start fresh context
+for the next topic. See [kickoff](kickoff.md#handoff).

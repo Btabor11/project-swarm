@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.14.0
+
+- Complete successful jobs with denied reads and surface capped permission warnings; retain changed declared outputs when jobs fail, while keeping failed runs blocked from integration.
+- Add `redcheck <run-id> --test <argv...>` to verify regression tests against base implementation bytes, with conflict checks and restoration on command failure.
+- Record nine field lessons, a push-only CI diagnostic template, measured evidence versus hypotheses, quieter race tracing, response-release snapshots, one mutant per guard, and fresh context at topic boundaries.
+
 ## 1.13.0
 
 - Refuse `--root` on update/version before git access; updates validate the install checkout and target release before checkout.

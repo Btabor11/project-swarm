@@ -21,11 +21,12 @@ agents can follow AGENTS.md or CLAUDE.md. The shared installed skill lives at
 `<install>/current/skills/project-swarm/SKILL.md`, even without agent homes.
 
 Follow [Agent kickoff](references/kickoff.md) for a new project: install from
-v1.13.0, run `install.mjs --user`, link, doctor, and the read-only and writing
+v1.14.0, run `install.mjs --user`, link, doctor, and the read-only and writing
 smoke tests. Ask up front which providers may receive code and the spend
 ceiling; record answers before model calls. Fill TASK.md from the goal, keep
 HANDOFF.md and TASK.md current after every dispatch, log swarm-lessons.md,
-and hand off at the 10th build dispatch using the seat's exact prompt.
+and hand off at the 10th build dispatch or before unrelated work, whichever
+comes first, using the seat's exact prompt.
 Never commit `.swarm/`, let a worker see secrets, or pass `--root` to update/version.
 Link preserves existing seed files, updates only agent marker blocks and adds
 `.swarm/` to `.gitignore`; `--no-agent-files` opts out of agent pointers.
@@ -98,6 +99,44 @@ Route by difficulty, not topic. Auth, async and similar topics are not triggers 
 - `expensive`: genuinely hard work—a new design with no clear contract, or tricky reasoning a mid-tier worker would likely get wrong—or a step a mid-tier worker already failed twice (escalate that one job one tier and record why in `tierReason`).
 
 A design choice that is not already in the plan is never a reason to escalate tier. Stop and ask the human. The runner has no retry/re-dispatch path; the escalate-after-two-failures rule is something the coordinator does by hand — dispatch a fresh job with `tier: "expensive"` — not something the runner automates. Full routing guidance: [active orchestration](references/orchestration.md).
+
+## Field lessons and prompt guidance
+
+The [lessons file](references/lessons.md) is the loop: every real-run friction becomes an entry plus, where possible, a tool check and a test.
+
+Separate job prompts into **Evidence (measured)** and **Hypothesis**. Put
+observed commands, outputs and event order in the first; put proposed causes
+and untested assumptions in the second. A handoff inference is not evidence.
+
+For UI-test assignments, keep element waits below the enclosing test timeout.
+Diagnose a hang with a long `--testTimeout` so an individual wait can fail and
+name the stuck step. Held-response fakes must offer snapshot-at-release when
+the real service can serve a request after a later event; capturing at request
+time cannot reproduce that order.
+
+### Tracing races
+
+Logging around a race can change timing and hide it. Record events into an
+in-memory array and print only on failure. Preserve event order without
+synchronous console probes in the timing-sensitive path.
+
+### Verify the regression claim
+
+Run `node {{SWARM_RUNNER}} redcheck <run-id> --test <argv...>` before trusting
+a worker's claim that its regression test fails on old code. Integrate and run
+the tests with the fix first. Redcheck temporarily restores non-test outputs
+to their base, leaves tests in place, and restores job versions even on command
+errors. It prints `{status,exitCode,restored,tail}`: `red` exits 0, `green` or
+`error` exits 1. Confirm the red failure is the intended assertion, then rerun
+with the fix. See [redcheck](references/manifest-reference.md#redcheck).
+Add one mutant per new guard before shipping; a single regression test may
+leave several guards untested. See [verification](references/verification.md).
+
+Denied reads alone do not fail a successful job that produced a result and
+has its outputs. Review `warnings` in `run` or `inspect --results`; each denial
+names the job, tool and path/input, capped at 200 characters. Other failures
+still block integration. Changed declared outputs from failed jobs remain at
+`keptWorkspace` for review; retention does not authorize integration.
 
 ## Completion and reuse
 
