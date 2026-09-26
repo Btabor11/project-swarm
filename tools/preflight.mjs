@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Advisory task sizing. This module neither starts workers nor changes a manifest.
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { validateManifest, validateProject } from './swarm.mjs';
 
 export const PREFLIGHT_THRESHOLDS = Object.freeze({ outputs: 5, contextBytes: 160 * 1024 });
@@ -10,7 +12,7 @@ export async function preflightProject(root, manifest) {
   // Use the same guarded reads as execution. Do not follow validation with a
   // second, unguarded filesystem walk merely to gather size information.
   const validated = await validateProject(root, manifest);
-  const advisories = [...validated.warnings];
+  const advisories = [...validated.warnings, ...await projectToolWarnings(root)];
   const copies = new Map();
   const jobs = validated.jobs.map((checked, index) => {
     const job = manifest.jobs[index];
@@ -67,4 +69,33 @@ export async function preflightProject(root, manifest) {
       'No source contents, prompt text, provider calls, automatic splitting, or worker dispatch are included in this report.',
     ],
   };
+}
+
+// Static, advisory inspection only. Do not execute JS configs or follow symlinks.
+// An unrecognized/extended config remains a warning, never proof of exclusion.
+export async function projectToolWarnings(root){
+ const warnings=[];
+ for(const entry of (await fs.readdir(root,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){
+  const file=entry.name;
+  let key;
+  if(/^tsconfig(?:\.[^.]+)?\.json$/.test(file))key='exclude';
+  else if(/^(vitest|vite)\.config\.[cm]?[jt]s$/.test(file))key='exclude';
+  else if(/^jest\.config\.[cm]?[jt]s$/.test(file))key='testPathIgnorePatterns';
+  else if(/^eslint\.config\.[cm]?[jt]s$/.test(file)||/^\.eslintrc(?:\..+)?$/.test(file))key='ignores|ignorePatterns';
+  else if(/^playwright\.config\.[cm]?[jt]s$/.test(file))key='testIgnore';
+  else if(['pytest.ini','.pytest.ini','pyproject.toml','setup.cfg','tox.ini'].includes(file))key='norecursedirs';
+  else if(file==='package.json')key='testPathIgnorePatterns';
+  else continue;
+  if(!entry.isFile()){warnings.push({code:'swarm-tool-exclusion',path:file,message:'Cannot statically verify tool exclusions (not a regular file); review .swarm/ exclusions in docs/setup.md.'});continue;}
+  const full=path.join(root,file);
+  if((await fs.stat(full)).size>1024*1024){warnings.push({code:'swarm-tool-exclusion',path:file,message:'Config too large for static exclusion check; review .swarm/ exclusions.'});continue;}
+  const text=await fs.readFile(full,'utf8');
+  if(file==='package.json'&&!/"jest"\s*:/.test(text))continue;
+  if(['pyproject.toml','setup.cfg','tox.ini'].includes(file)&&!/\[(?:tool\.pytest(?:\.ini_options)?|pytest|tool:pytest)\]/.test(text))continue;
+  // Limit matches to the named array/line so an unrelated mention cannot hide a warning.
+  const settings=[...text.matchAll(new RegExp(`(?:${key})["']?\\s*[:=]\\s*(\\[[^\\]]*\\]|[^\\n]*)`,'g'))].map(match=>match[1]);
+  if(settings.some(setting=>/\.swarm(?:[/'"\s*\]]|$)/.test(setting)))continue;
+  warnings.push({code:'swarm-tool-exclusion',path:file,message:'This config may scan .swarm/ source and test copies. No explicit exclusion found by the best-effort static check; see docs/setup.md and docs/kickoff.md. Extended, dynamic, and narrow include configs need manual review.'});
+ }
+ return warnings;
 }

@@ -67,7 +67,10 @@ export function referencePatterns(outputPath) {
 function tryGitLsFiles(root) {
   try {
     const out = execFileSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    return out.split('\0').filter(Boolean);
+    const files = out.split('\0').filter(Boolean);
+    // A newly linked project may have no index yet, or live in an ignored
+    // directory of a parent checkout. An empty index is not an empty project.
+    return files.length ? files : null;
   } catch {
     return null;
   }

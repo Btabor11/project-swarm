@@ -43,7 +43,7 @@ async function gitDirty(dir,paths){
 
 async function skillFilePairs(source){
  const pairs=[['skills/project-swarm/SKILL.md','SKILL.md'],['SECURITY.md','references/SECURITY.md'],['CONTRIBUTING.md','references/CONTRIBUTING.md']];
- for(const file of (await fs.readdir(path.join(source,'docs'))).filter(f=>f.endsWith('.md')).sort())pairs.push([`docs/${file}`,`references/${file}`]);
+ for(const file of (await fs.readdir(path.join(source,'docs'))).filter(f=>/\.(md|json)$/.test(f)).sort())pairs.push([`docs/${file}`,`references/${file}`]);
  return pairs;
 }
 
@@ -56,23 +56,28 @@ async function listFiles(dir,base=dir,out=[]){
  return out;
 }
 
-// Snapshots tools/** and package.json into versions/<version>-<hash8>, so a live run that
+// Snapshots runtime and rendered skill references into versions/<version>-<hash8>, so a live run that
 // keeps importing through current/ never sees files change under it. hash8 is the first 8 hex
 // chars of a sha256 over every copied file's relative path and contents, so re-installing
 // identical files resolves to the same dir instead of growing versions/ on every run.
 async function snapshotVersion(source,version){
- const files=[...(await listFiles(path.join(source,'tools'))).map(file=>path.join('tools',file)),'package.json'].sort();
+ const files=[...(await listFiles(path.join(source,'tools'))).map(file=>[path.join('tools',file),path.join('tools',file)]),['package.json','package.json'],...(await skillFilePairs(source)).map(([from,to])=>[from,`skills/project-swarm/${to}`])].sort(([a],[b])=>a.localeCompare(b));
  const hash=createHash('sha256');
- for(const relative of files){hash.update(relative);hash.update(await fs.readFile(path.join(source,relative)));}
+ for(const [relative] of files){hash.update(relative);hash.update(await fs.readFile(path.join(source,relative)));}
  const versionDir=path.join(source,'versions',`${version}-${hash.digest('hex').slice(0,8)}`);
  let exists=false;
  try{exists=(await fs.stat(versionDir)).isDirectory();}catch(error){if(error.code!=='ENOENT')throw error;}
  if(!exists){
   const tmpDir=`${versionDir}.tmp-${process.pid}`;
-  for(const relative of files){
-   const destination=path.join(tmpDir,relative);
+  for(const [relative,target] of files){
+   const destination=path.join(tmpDir,target);
    await fs.mkdir(path.dirname(destination),{recursive:true});
-   await fs.copyFile(path.join(source,relative),destination);
+   if(target.startsWith('skills/')){
+    let content=await fs.readFile(path.join(source,relative),'utf8');
+    content=content.split('{{SWARM_RUNNER}}').join(path.join(source,'current/tools/swarm.mjs'));
+    if(target.includes('/references/'))content=content.replace(/\]\(\.\.\/(SECURITY|CONTRIBUTING)\.md\)/g,']($1.md)').replace(/\]\(docs\//g,'](');
+    await fs.writeFile(destination,content);
+   }else await fs.copyFile(path.join(source,relative),destination);
   }
   await fs.rename(tmpDir,versionDir);
  }
@@ -146,14 +151,44 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner};
 }
 
-async function hasExistingCoordination(root){
- try{return (await fs.readdir(path.join(root,'coordination'))).length>0;}
- catch(error){if(error.code==='ENOENT')return false;throw error;}
+const AGENT_START='<!-- project-swarm:start -->';
+const AGENT_END='<!-- project-swarm:end -->';
+
+async function readOptional(file){
+ try{return await fs.readFile(file,'utf8');}catch(error){if(error.code==='ENOENT')return '';throw error;}
+}
+
+// Only our delimited block is replaced. Refuse broken markers instead of guessing
+// where user instructions end. Cursor gets frontmatter only on a newly created file.
+async function writeAgentPointer(root,relative,template,installRoot){
+ const destination=await safeTarget(root,relative,{createParents:true});
+ const before=await readOptional(destination);
+ const rendered=template.split('{{SWARM_INSTALL}}').join(installRoot);
+ const start=before.indexOf(AGENT_START),end=before.indexOf(AGENT_END);
+ let after;
+ if(start!==-1||end!==-1){
+  if(start===-1||end<start||before.indexOf(AGENT_START,start+1)!==-1||before.indexOf(AGENT_END,end+1)!==-1)throw Error(`Malformed project-swarm markers: ${relative}`);
+  const block=rendered.slice(rendered.indexOf(AGENT_START),rendered.indexOf(AGENT_END)+AGENT_END.length);
+  after=before.slice(0,start)+block+before.slice(end+AGENT_END.length);
+ }else after=before?before+(before.endsWith('\n')?'':'\n')+'\n'+rendered.slice(rendered.indexOf(AGENT_START)):rendered;
+ if(after!==before)await fs.writeFile(await safeTarget(root,relative),after);
+}
+
+async function ensureSwarmIgnore(root){
+ const destination=await safeTarget(root,'.gitignore');
+ const before=await readOptional(destination);
+ const lines=before.split(/\r?\n/).map(line=>line.trim());
+ // Put our rule after any negation, including broad !*/ patterns.
+ const lastNegation=lines.findLastIndex(line=>line.startsWith('!'));
+ const ignored=lines.some((line,index)=>index>lastNegation&&['.swarm/','/.swarm/','.swarm','/.swarm'].includes(line));
+ if(ignored)return false;
+ await fs.writeFile(destination,before+(before&&!before.endsWith('\n')?'\n':'')+'.swarm/\n');
+ return true;
 }
 
 // Links one project to a shared install instead of copying the runner into it. The project
 // gets a small pointer file; the install root keeps a deduped registry of linked projects.
-export async function installProject(targetDirectory,{source=packageRoot}={}){
+export async function installProject(targetDirectory,{source=packageRoot,agentFiles=true}={}){
  const root=await fs.realpath(targetDirectory);
  if(!(await fs.stat(root)).isDirectory())throw Error('Target must be an existing project directory');
  const installRoot=await fs.realpath(source);
@@ -166,20 +201,23 @@ export async function installProject(targetDirectory,{source=packageRoot}={}){
  try{registry=JSON.parse(await fs.readFile(registryPath,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
  if(!Array.isArray(registry))registry=[];
  if(!registry.includes(root)){registry.push(root);await fs.writeFile(registryPath,`${JSON.stringify(registry,null,2)}\n`);}
- let added=[];
- if(!(await hasExistingCoordination(root))){
-  const pairs=[['examples/smoke.json','coordination/swarm-smoke.json'],['examples/parallel-review.json','coordination/swarm-parallel-review.json']];
-  for(const file of (await fs.readdir(path.join(installRoot,'examples'))).filter(f=>f.endsWith('.json')&&!['smoke.json','parallel-review.json'].includes(f)).sort())pairs.push([`examples/${file}`,`coordination/swarm-${file}`]);
-  for(const [from,to] of pairs){
-   const destination=await safeTarget(root,to,{createParents:true});
-   let existing;try{existing=await fs.readFile(destination);}catch(error){if(error.code!=='ENOENT')throw error;}
-   if(existing!==undefined)continue; // created by a concurrent actor since the directory check above
-   const bytes=await fs.readFile(path.join(installRoot,from));
-   await fs.writeFile(destination,bytes,{flag:'wx'});
+ const added=[],kept=[];
+ const pairs=(await fs.readdir(path.join(installRoot,'examples'))).filter(f=>f.endsWith('.json')).sort().map(file=>[`examples/${file}`,`coordination/swarm-${file}`]);
+ for(const file of ['ORCHESTRATOR.md','HANDOFF.md','TASK.md','swarm-lessons.md'])pairs.push([`templates/coordination/${file}`,`coordination/${file}`]);
+ for(const [from,to] of pairs){
+  const destination=await safeTarget(root,to,{createParents:true});
+  try{
+   await fs.writeFile(destination,await fs.readFile(path.join(installRoot,from)),{flag:'wx'});
    added.push(to);
-  }
+  }catch(error){if(error.code!=='EEXIST')throw error;kept.push(to);}
  }
- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added};
+ const agentPaths=[];
+ if(agentFiles)for(const [template,to] of [['AGENTS.md','AGENTS.md'],['CLAUDE.md','CLAUDE.md'],['cursor-rule.mdc','.cursor/rules/project-swarm.mdc']]){
+  await writeAgentPointer(root,to,await fs.readFile(path.join(installRoot,'templates/agent-pointers',template),'utf8'),installRoot);
+  agentPaths.push(to);
+ }
+ const gitignoreAdded=await ensureSwarmIgnore(root);
+ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,gitignoreAdded};
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
@@ -192,8 +230,8 @@ if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.ur
    result=await installUser({dev:flags.includes('--dev')});
   }else{
    const [target,...rest]=argv;
-   if(!target||rest.length)throw Error('Usage: node tools/install.mjs --user [--dev] | /path/to/existing-project');
-   result=await installProject(target);
+   if(!target||rest.some(flag=>flag!=='--no-agent-files'))throw Error('Usage: node tools/install.mjs --user [--dev] | /path/to/existing-project [--no-agent-files]');
+   result=await installProject(target,{agentFiles:!rest.includes('--no-agent-files')});
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
  }catch(error){process.stderr.write(`${JSON.stringify({status:'error',error:error.message})}\n`);process.exitCode=1;}

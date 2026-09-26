@@ -149,9 +149,9 @@ test('onboard lists ready and needs-setup agents from an injected doctor and sta
   {agent:'ollama',configured:false}
  ]});
  const output=await onboardReport('/unused',{doctorAllImpl:fakeDoctorAll});
- assert.match(output,/- claude: ready/);
+ assert.match(output,/- claude: compatible \(smoke required\)/);
  assert.match(output,/- codex: needs setup — macOS seatbelt is required/);
- assert.match(output,/- openai: ready/);
+ assert.match(output,/- openai: configured; reachability not checked/);
  assert.match(output,/- ollama: needs setup — run: node tools\/swarm\.mjs doctor ollama/);
  assert.ok(output.split('\n').length<=80);
 });
@@ -166,4 +166,35 @@ test('validate in a project linked to a different swarm version prints one warni
  const {stdout,stderr}=await execFileAsync(process.execPath,[path.join(packageRoot,'tools/swarm.mjs'),'--root',project,'validate','coordination/manifest.json'],{encoding:'utf8'});
  assert.match(stderr,/Warning:.*swarm update/);
  assert.equal(JSON.parse(stdout).status,'valid');
+});
+
+test('update and version with --root refuse before git and leave the project HEAD and branch untouched',async t=>{
+ const project=await tempDir(t);await initRepo(project);
+ await fs.writeFile(path.join(project,'package.json'),JSON.stringify({name:'customer-project',version:'0.1.0'}));
+ await commitAll(project,'tagged');await git(project,['tag','v99.0.0']);
+ await fs.writeFile(path.join(project,'later.txt'),'unreleased');await commitAll(project,'later');
+ const before=await git(project,['rev-parse','HEAD']);
+ for(const command of ['update','version'])for(const args of [['--root',project,command],[command,'--root',project]]){
+  await assert.rejects(execFileAsync(process.execPath,[path.join(packageRoot,'tools/swarm.mjs'),...args]),error=>{
+   assert.match(error.stderr,/--root.*not allowed.*shared install/);return true;
+  });
+  assert.equal(await git(project,['rev-parse','HEAD']),before);assert.equal((await git(project,['branch','--show-current'])).trim(),'main');
+ }
+});
+test('updateInstall rejects a non-swarm checkout before fetching or checking out tags',async t=>{
+ const project=await tempDir(t);await initRepo(project);await fs.writeFile(path.join(project,'package.json'),JSON.stringify({name:'other',version:'0.1.0'}));
+ await commitAll(project,'base');await git(project,['tag','v99.0.0']);
+ await assert.rejects(updateInstall(project),/project-swarm install/);
+ assert.equal((await git(project,['branch','--show-current'])).trim(),'main');
+});
+
+test('update refuses nested installs and foreign release tags without moving HEAD',async t=>{
+ const root=await updateFixture(t),nested=path.join(root,'nested');await fs.mkdir(nested);
+ await fs.writeFile(path.join(nested,'package.json'),JSON.stringify({name:'project-swarm',version:'1.0.0'}));
+ await assert.rejects(updateInstall(nested),/install must be its own git checkout/);
+ await fs.writeFile(path.join(root,'package.json'),JSON.stringify({name:'other-project',version:'99.0.0'}));
+ await commitAll(root,'foreign release');await git(root,['tag','v99.0.0']);await git(root,['checkout','v1.0.0']);
+ const before=await git(root,['rev-parse','HEAD']);
+ await assert.rejects(updateInstall(root),/release tag is not a matching project-swarm install/);
+ assert.equal(await git(root,['rev-parse','HEAD']),before);
 });

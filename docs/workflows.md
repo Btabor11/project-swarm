@@ -1,6 +1,6 @@
 # Coordination workflows
 
-The coordinator owns the outcome. Workers receive small assignments with enough context to answer or edit independently. Keep design choices, task boundaries, review, integration, and final validation with the coordinator.
+Any agent can be the orchestrator: Claude Code, Codex CLI, Cursor, Gemini CLI or others. Load it with: `Read the installed Project Swarm SKILL.md and coordination/ORCHESTRATOR.md.` See [kickoff](kickoff.md) for install and handoff. The coordinator owns the outcome. Workers receive small assignments with enough context to answer or edit independently. Keep design choices, task boundaries, review, integration, and final validation with the coordinator.
 
 ## Ask an agent to operate the swarm
 
@@ -64,7 +64,7 @@ If one output is unacceptable, do not integrate the run simply to obtain another
 
 ## Model selection
 
-Set a job's `model` field when you want a specific model or alias. For Claude only, omitting it leaves model choice to the installed Claude CLI's default. Availability and alias resolution depend on the provider account and CLI.
+Every job must set an explicit `model`; validation refuses a missing model and never uses a CLI default. Availability and alias resolution depend on the provider account and CLI.
 
 Use recorded provider metadata to distinguish the requested alias from the model that answered. A label such as `sonnet` is not a guarantee of a permanent model version. Select models based on observed task quality, latency, and account access; this project does not assume a model is cheaper or better without evidence.
 

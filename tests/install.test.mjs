@@ -14,7 +14,7 @@ async function tempDir(t){const dir=await fs.mkdtemp(path.join(os.tmpdir(),'swar
 // so the uncommitted-changes guard has nothing to detect and --dev is never required here.
 async function sourceFixture(t){
  const dir=await tempDir(t);
- for(const entry of ['tools','skills','docs','examples','SECURITY.md','CONTRIBUTING.md','package.json'])await fs.cp(path.join(packageRoot,entry),path.join(dir,entry),{recursive:true});
+ for(const entry of ['tools','skills','docs','examples','templates','SECURITY.md','CONTRIBUTING.md','package.json'])await fs.cp(path.join(packageRoot,entry),path.join(dir,entry),{recursive:true});
  return dir;
 }
 
@@ -158,13 +158,13 @@ test('installProject writes a pointer and the registry, and copies no runner',as
  await assert.rejects(fs.access(path.join(project,'skills')));
 });
 
-test('installProject does not create coordination examples when the project already has some, and dedupes the registry',async t=>{
+test('installProject seeds missing coordination examples when the project already has some, and dedupes the registry',async t=>{
  const source=await sourceFixture(t),project=await tempDir(t);
  await fs.mkdir(path.join(project,'coordination'));
  await fs.writeFile(path.join(project,'coordination/custom.json'),'{}');
  const first=await installProject(project,{source});
- assert.equal(first.coordinationCreated,false);
- assert.deepEqual(first.added,[]);
+ assert.equal(first.coordinationCreated,true);
+ assert.ok(first.added.includes('coordination/ORCHESTRATOR.md'));
  assert.equal(await fs.readFile(path.join(project,'coordination/custom.json'),'utf8'),'{}');
  await installProject(project,{source});
  const registry=JSON.parse(await fs.readFile(path.join(source,'.swarm-projects.json'),'utf8'));
@@ -176,4 +176,22 @@ test('installProject rejects a symlinked destination component',async t=>{
  await fs.symlink(outside,path.join(project,'coordination'));
  await assert.rejects(installProject(project,{source}),/Symlink refused/);
  assert.deepEqual(await fs.readdir(outside),[]);
+});
+
+test('installUser provides a resolved shared skill with references even without supported agent homes',async t=>{
+ const source=await sourceFixture(t),home=await tempDir(t);
+ const installed=await installUser({source,home});
+ const skill=await fs.readFile(path.join(source,'current/skills/project-swarm/SKILL.md'),'utf8');
+ assert.ok(skill.includes(installed.runner));assert.ok(!skill.includes('{{SWARM_RUNNER}}'));
+ assert.ok((await fs.stat(path.join(source,'current/skills/project-swarm/references/kickoff.md'))).size>0);
+ assert.deepEqual(installed.skipped,['.claude','.codex']);
+});
+
+test('installed guide references include the sweep goals JSON example',async t=>{
+ const source=await sourceFixture(t),home=await tempDir(t);await fs.mkdir(path.join(home,'.codex'));
+ await installUser({source,home});
+ for(const skill of [path.join(source,'current/skills/project-swarm'),path.join(home,'.codex/skills/project-swarm')]){
+  const example=JSON.parse(await fs.readFile(path.join(skill,'references/sweep-goals-example.json'),'utf8'));
+  assert.ok(example.areas.length>0);
+ }
 });

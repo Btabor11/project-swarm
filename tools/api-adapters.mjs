@@ -38,7 +38,24 @@ export function apiConfiguration(agent, env = process.env) {
 
 export function apiDoctor(agent, env = process.env) {
   const config = apiConfiguration(agent, env);
-  return { agent, status: config.configured ? 'configured' : 'unconfigured', configured: config.configured, liveVerified: false, authentication: agent === 'ollama' ? 'Optional OLLAMA_API_KEY; service/model availability not checked' : agent === 'lambda' ? `LAMBDA_API_KEY ${config.key ? 'present' : 'absent'}; required for hosted Lambda Inference, optional for a self-hosted SWARM_LAMBDA_URL origin` : `${config.keyName}${agent === 'gemini' ? ' or GOOGLE_API_KEY' : ''} ${config.configured ? 'present' : 'required'}`, endpoint: config.endpoint, tools: [], mode: 'single-request text/files', note: 'No network request made; run a bounded smoke job to verify access and model support.' };
+  return { agent, status: config.configured ? 'configured' : 'unconfigured', configured: config.configured, liveVerified: false, reachable: null, authentication: agent === 'ollama' ? 'Optional OLLAMA_API_KEY; service/model availability not checked' : agent === 'lambda' ? `LAMBDA_API_KEY ${config.key ? 'present' : 'absent'}; required for hosted Lambda Inference, optional for a self-hosted SWARM_LAMBDA_URL origin` : `${config.keyName}${agent === 'gemini' ? ' or GOOGLE_API_KEY' : ''} ${config.configured ? 'present' : 'required'}`, endpoint: config.endpoint, tools: [], mode: 'single-request text/files', note: 'No network request made; run a bounded smoke job to verify access and model support.' };
+}
+
+// Opt-in health only: never send credentials, project content, or model prompts.
+// Remote HTTPS origins and cloud keys remain configuration-only, even with opt-in.
+export async function probeLocalProvider(agent,env=process.env,{timeoutMs=1500,fetchImpl=fetch}={}){
+ const report=apiDoctor(agent,env),url=new URL(report.endpoint);
+ if(!['ollama','lambda'].includes(agent)||!['127.0.0.1','[::1]','localhost'].includes(url.hostname))return report;
+ url.pathname=agent==='ollama'?'/api/tags':'/v1/models';
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),Math.min(Math.max(timeoutMs,1),3000));
+ try{
+  const response=await fetchImpl(url.href,{method:'GET',redirect:'error',signal:controller.signal});
+  await response.body?.cancel();
+  return {...report,status:response.ok?'reachable':'unreachable',reachable:response.ok,probeStatus:response.status,note:'Local HTTP health checked without credentials; authentication and model availability remain unverified.'};
+ }catch{
+  return {...report,status:'unreachable',reachable:false,note:'Local health request failed or timed out; start the service and retry doctor --probe-local.'};
+ }finally{clearTimeout(timer);}
 }
 
 export function outputSchema(outputs) {

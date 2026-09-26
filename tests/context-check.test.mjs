@@ -218,3 +218,15 @@ test('validateProject refusal carries suggestedIgnoreTests grouped by job (lesso
     return true;
   });
 });
+
+test('fresh projects with no tracked files still discover tests, including inside an ignored parent',async t=>{
+ const parent=await fixture(t);execFileSync('git',['-C',parent,'init','-q']);
+ await fs.writeFile(path.join(parent,'.gitignore'),'new-project/\n');
+ const project=path.join(parent,'new-project');await fs.mkdir(path.join(project,'tests'),{recursive:true});
+ await fs.writeFile(path.join(project,'widget.mjs'),'export const widget=1;');
+ await fs.writeFile(path.join(project,'tests/widget.test.mjs'),"import '../widget.mjs';");
+ const expected=[{output:'widget.mjs',test:'tests/widget.test.mjs'}];
+ assert.deepEqual(findUncoveredTests(project,{context:[],outputs:['widget.mjs']}),expected);
+ execFileSync('git',['-C',project,'init','-q']);
+ assert.deepEqual(findUncoveredTests(project,{context:[],outputs:['widget.mjs']}),expected);
+});
