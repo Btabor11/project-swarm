@@ -70,6 +70,65 @@ A self-hosted origin also receives `chat_template_kwargs: { enable_thinking: fal
 
 This is an Ollama chat/schema adapter, not a universal OpenAI-compatible proxy adapter. It does not assume every local model supports JSON schema reliably. If local inference is slow, first reduce input/output scope and concurrency rather than disabling validation.
 
+## Box checks (run_check)
+
+Claude workers can run tests and checks inside a dedicated OpenShell sandbox (`swarm-box`) without shell access to the host. A job's manifest declares named checks with argv, working directory, and timeout; the worker calls `run_check(name)` to execute them, receiving exit code, elapsed time, and output tails.
+
+### Manifest fields
+
+Under a top-level `boxChecks` object, each check is a named entry:
+```json
+{
+  "boxChecks": {
+    "test-name": {
+      "argv": ["npm", "test"],
+      "cwd": "services/example",
+      "timeoutMs": 60000
+    }
+  }
+}
+```
+- `argv`: array of command and arguments (no shell metacharacters; `argv[0]` must be in the sandbox's allowed programs: `node`, `npx`, `npm`, `python3`, `pytest`, `tsc`)
+- `cwd`: optional working directory relative to the workspace root
+- `timeoutMs`: optional timeout in milliseconds (defaults based on sandbox configuration)
+
+A job's `boxChecks` field names the subset of checks it can invoke: `"boxChecks": ["test-name"]`.
+
+### Repository base layer (`boxBase`)
+
+A box normally receives only the worker's declared files, which is enough to run a check against the files a job touches but not enough for a check — such as a full `vitest` run — that needs the rest of the repository. An optional top-level `boxBase` names a repo the Helm worker knows, so the sandbox stages a `git archive` of it before the worker's own files are synced on top:
+```json
+{
+  "boxChecks": { "test-name": { "argv": ["npx", "vitest", "run"] } },
+  "boxBase": { "repo": "cluer-helm" }
+}
+```
+- `repo`: a name registered on the Helm worker side (pattern `^[a-z0-9][a-z0-9._-]{0,63}$`); it never carries an endpoint, credential, or path, matching the rule that manifests carry no endpoints or credentials.
+- `boxBase` is only a legal manifest field when the manifest declares `boxChecks` somewhere (top-level or on a job); otherwise it is refused as an unknown field.
+- The runner resolves the ref once at run start, to the project root's `git rev-parse HEAD` (a full sha), and records `{repo, ref}` in the run status (`state.boxBase`) so every box in the run stages the exact commit the run itself was built against.
+- Without `boxBase`, box creation is unchanged: no `base` field is sent to the Helm box API.
+
+### Configuration
+
+Configure via local environment outside the manifest (never include credentials in manifests):
+- `SWARM_BOX_URL`: origin of the Helm box API (e.g. `http://dev2:8000`)
+- `SWARM_BOX_TOKEN_FILE`: path to a file containing the bearer token
+
+### What the worker can do
+
+- Call `run_check(name)` for each declared check after making edits
+- Receive: exit code (0 on success), seconds elapsed, last ~20 KB of stdout and stderr
+- Re-run checks multiple times to verify fixes
+- Stop and return `blocked` if a check fails and the failure blocks the task
+
+### What the worker cannot do
+
+- Run arbitrary commands (only the manifest's declared checks)
+- Access the host shell or filesystem
+- Access the network (the sandbox has no egress)
+- Receive check stdout/stderr beyond the configured tail limit
+- Import check outputs back into the workspace (the box is for validation only)
+
 ## Official protocol references
 
 Implementation references, reviewed for this release:
