@@ -101,6 +101,7 @@ node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
 node tools/swarm.mjs integrate <run-id> --mutants
+node tools/swarm.mjs redcheck <run-id> --test node --test tests/regression.test.mjs
 node tools/swarm.mjs cancel <run-id>
 node tools/swarm.mjs board
 node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json
@@ -172,6 +173,7 @@ Each run uses these project-local locations:
 .swarm/
   runs/<run-id>/
     worktrees/<codex-job-id>/  # temporary detached HEAD checkout, removed after job
+    base/<job-id>/           # exact original output bytes for redcheck
     manifest.json
     state.json
     <job-id>/
@@ -193,7 +195,13 @@ Each run uses these project-local locations:
 
 The exact prompt, model response, and provider events are local evidence, not material to publish automatically. Provider metadata may contain usage and actual model identifiers when the provider emits them. API records contain a normalized event, numeric usage, and model identifier rather than raw HTTP responses or headers. API cost is unavailable, not inferred. Missing metadata must be reported as unavailable, not inferred from a requested alias.
 
-An overall successful run has `status: "complete"`; individual jobs may instead fail, time out, or be cancelled. For Claude, a zero subprocess exit code alone is insufficient: the runner requires a successful provider result event and rejects malformed output, missing results, and reported permission denials.
+An overall successful run has `status: "complete"`; individual jobs may instead fail, time out, or be cancelled. For Claude, a zero subprocess exit code alone is insufficient: the runner requires a successful provider result event and rejects malformed output and missing results. Permission denials alone
+become warnings when a successful job produced a response or changed output
+and all declared outputs exist. Each warning is `permission denials: <job>:
+<tool> <path-or-input>`, capped at 200 characters, in `run`, `wait`, `inspect`
+and `inspect --results`. Any other failure still fails the job. Failed jobs
+with changed declared outputs set `keptWorkspace` for inspection; failed runs
+remain ineligible for integration.
 
 ## Integration contract
 
@@ -230,6 +238,45 @@ Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrate
 The text `{root}` may also appear anywhere inside a `checks` or `mutantCheck` argv item — not only as a whole item — and is replaced with the run's absolute project root, for example `"CARGO_TARGET_DIR={root}/src-tauri/target"`. This keeps a project-relative build directory unique per run so two parallel runs never share (and corrupt) the same build folder. `{integrated}`/`{integrated:.ext}` still only expand a whole item, unchanged.
 
 Checks run with `cwd` at the project root, the coordinator's inherited environment, and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []` and `checksSkipped: true`).
+
+## Redcheck
+
+```sh
+node tools/swarm.mjs redcheck <run-id> --test <argv...>
+```
+
+The exported function is `redcheckRun(root, runId, argv, options)`; tests may
+inject `spawnImpl` and `timeoutMs` (default 300000). The CLI runs argv directly
+without a shell in the selected root. Everything after `--test`, including
+flags such as `--root`, belongs to the test command.
+
+For a complete or integrated run, redcheck temporarily restores **every
+non-test declared output** to its base content. Test paths are under `tests/`
+or `test/`, or have names matching `*.test.*`, `*.spec.*`, or `*_test.*`.
+Test files stay untouched. Integrate first so the new tests are available;
+a complete unintegrated run is also accepted if the command and needed tests
+already exist in the root. In either case the job's implementation versions
+are restored afterward, even on a launch error, timeout or failing command.
+Thus running it before integration also leaves those implementation proposals
+in the root; it does not mark the run integrated.
+
+New runs save exact base bytes and a base commit. For older hash-only records,
+redcheck uses matching current bytes or `git show <base>:<path>` (HEAD when no
+base commit was saved), verifying the hash before any write. An output absent
+at base is temporarily removed and then recreated from the proposal. It
+refuses all changes before running the command if a target differs from both
+base and job bytes, including uncommitted edits. It shares the integration
+lock; keep unrelated writers out of these paths during the check.
+
+One JSON line reports `{status:'red'|'green'|'error', exitCode, restored:[paths],
+tail}`. `restored` lists paths temporarily reverted to base; `tail` keeps the
+last 2000 characters of combined command output. `red` means a nonzero test
+exit and exits 0; `green` means tests passed without the fix and exits 1.
+Launch errors, signals, timeouts, conflicts and restoration failures report
+`error` and exit 1. No model claim substitutes for this check: first verify the
+tests pass with the fix, inspect that the red failure is the intended
+regression assertion, then verify they pass again after restoration. A red
+exit alone can also be an unrelated test failure.
 
 ## Repeat
 

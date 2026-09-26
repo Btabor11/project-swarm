@@ -11,13 +11,13 @@ Replace PROJECT and GOAL with your project directory and intended outcome.
 This is a request to perform the installation and checks, not merely describe them.
 
 ```text
-Set up Project Swarm 1.13.0 for PROJECT and use it to deliver GOAL.
+Set up Project Swarm 1.14.0 for PROJECT and use it to deliver GOAL.
 Before sending code or making model calls, ask me which model providers may
 receive this project's code and what spend ceiling applies. Record my answers;
 wait for them before dispatch. Never ask me to paste secrets into chat.
-Check Node >=20.3. Install the shared toolkit from tag v1.13.0 at
+Check Node >=20.3. Install the shared toolkit from tag v1.14.0 at
 ~/.project-swarm (or my chosen install directory). For a new installation:
-git clone --branch v1.13.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
+git clone --branch v1.14.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
 If the directory already exists, verify its identity and version first; preserve
 local edits, and ask before upgrading unless I have already authorized it.
 Run node ~/.project-swarm/tools/install.mjs --user, then
@@ -38,7 +38,8 @@ and initialize coordination/HANDOFF.md. Plan bounded jobs, one writer per
 file, explicit model/tier/tierReason and a shared contract for parallel work.
 Run preflight, then begin authorized work. Keep HANDOFF.md and TASK.md current
 after every dispatch, log friction in coordination/swarm-lessons.md, and hand
-off at the 10th build dispatch using the exact prompt below.
+off at the 10th build dispatch or before unrelated work, whichever comes first,
+using the exact prompt below.
 ```
 
 A dropped-in checkout can be the chosen install directory instead of cloning
@@ -109,7 +110,9 @@ need manual review; a warning is advisory and a quiet report is not proof.
 
 ## Handoff
 
-After the 10th build dispatch, update both tracking files and emit:
+Start fresh context per topic. At the dispatch limit (10 build dispatches) or
+when the next work is unrelated, whichever comes first, update both tracking
+files and emit:
 
 ```text
 You are orchestrator. Read coordination/ORCHESTRATOR.md, then coordination/HANDOFF.md,
